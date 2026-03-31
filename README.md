@@ -37,7 +37,7 @@ brew install gh && gh auth login  # Mac
 uv tool install /path/to/vuln-scanner
 
 # GitHub から直接
-uv tool install git+https://github.com/aRaikoFunakami/vuln-scanner
+uv tool install git+https://github.com/aRaikoFunakami/vuln-scanner.git
 ```
 
 開発時: `uv sync && uv run vuln-scanner`
