@@ -7,11 +7,13 @@ GitHub リポジトリおよびローカル開発環境を対象に、脆弱な�
 
 ## 対応する脅威
 
-| 脅威 | エコシステム | 脆弱バージョン | 概要 |
-|------|------------|--------------|------|
-| LiteLLM | Python (PyPI) | 1.82.7, 1.82.8 | SSH鍵・クラウド認証情報の窃取、バックドア設置 |
-| axios | npm | 1.14.1, 0.30.4 | plain-crypto-js 経由の RAT ドロッパー |
-| keyv 等（Shai-Hulud系） | npm | keyv 6.0.0 他 計394パッケージ | preinstall 経由の Infostealer、ワーム性あり（[詳細](https://blog.flatt.tech/entry/keyv_compromise)） |
+| 脅威 | エコシステム | 脆弱バージョン | 概要 | 調査基準日 | 参照 |
+|------|------------|--------------|------|-----------|------|
+| LiteLLM | Python (PyPI) | 1.82.7, 1.82.8 | SSH鍵・クラウド認証情報の窃取、バックドア設置 | 2026-03-30 | [GitHub Issue #24518](https://github.com/BerriAI/litellm/issues/24518) |
+| axios | npm | 1.14.1, 0.30.4 | plain-crypto-js 経由の RAT ドロッパー | 2026-03-31 | （参照URL未記録） |
+| keyv 等（Shai-Hulud系） | npm | keyv 6.0.0 他 計394パッケージ | preinstall 経由の Infostealer、ワーム性あり | 2026-08-07 | [GMO Flatt Security Blog](https://blog.flatt.tech/entry/keyv_compromise)（記事公開: 2026-08-04） |
+
+> **注意**: 「調査基準日」は各脅威データを本リポジトリに反映した時点であり、参照URLに当時公開されていた情報のスナップショットです。参照元の追加調査・訂正・対象パッケージの拡大には自動追従しません。特にワーム型攻撃（keyv等）は参照元記事自身が「調査は継続中」と明言しており、本リストが実際に侵害された全パッケージを網羅していることは保証しません。最新状況は各参照URLで直接確認してください。
 
 ## 必要なもの
 
