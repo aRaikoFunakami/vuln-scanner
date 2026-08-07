@@ -3,6 +3,6 @@ revision = 2
 requires-python = ">=3.9"
 
 [[package]]
-name = "litellm-vuln-scanner"
-version = "0.1.0"
+name = "vuln-scanner"
+version = "1.0.0"
 source = { editable = "." }

@@ -11,6 +11,7 @@ GitHub リポジトリおよびローカル開発環境を対象に、脆弱な�
 |------|------------|--------------|------|
 | LiteLLM | Python (PyPI) | 1.82.7, 1.82.8 | SSH鍵・クラウド認証情報の窃取、バックドア設置 |
 | axios | npm | 1.14.1, 0.30.4 | plain-crypto-js 経由の RAT ドロッパー |
+| keyv 等（Shai-Hulud系） | npm | keyv 6.0.0 他 計394パッケージ | preinstall 経由の Infostealer、ワーム性あり（[詳細](https://blog.flatt.tech/entry/keyv_compromise)） |
 
 ## 必要なもの
 

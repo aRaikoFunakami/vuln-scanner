@@ -58,12 +58,22 @@ class ThreatDefinition(ABC):
         """Indirect dependencies, malicious shims, etc."""
         ...
 
-    # ── Computed property ────────────────────────────────────────────────
+    # ── Computed properties ─────────────────────────────────────────────
+
+    @property
+    def direct_packages(self) -> Set[str]:
+        """All directly-targeted package names.
+
+        Defaults to ``{direct_package}``; override when an attack targets
+        more than one package directly (e.g. a mass worm compromising
+        hundreds of packages at once).
+        """
+        return {self.direct_package}
 
     @property
     def all_packages(self) -> Set[str]:
-        """Union of *direct_package* and *related_packages*."""
-        return {self.direct_package} | self.related_packages
+        """Union of *direct_packages* and *related_packages*."""
+        return self.direct_packages | self.related_packages
 
     # ── Abstract methods – parsing ───────────────────────────────────────
 

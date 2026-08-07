@@ -39,8 +39,11 @@ class DataDrivenThreat(ThreatDefinition):
 
         # Pre-compute package sets
         self._vulnerable_versions: Set[str] = set()
-        for versions in data["direct_packages"].values():
+        self._versions_by_package: Dict[str, Set[str]] = {}
+        for pkg_name, versions in data["direct_packages"].items():
             self._vulnerable_versions.update(versions)
+            normalized = pkg_name.lower().replace("-", "_")
+            self._versions_by_package.setdefault(normalized, set()).update(versions)
 
         self._direct_packages_set: Set[str] = set(data["direct_packages"].keys())
         self._indirect: Set[str] = set(data.get("indirect_packages", []))
@@ -67,8 +70,15 @@ class DataDrivenThreat(ThreatDefinition):
         return next(iter(self._direct_packages_set))
 
     @property
+    def direct_packages(self) -> Set[str]:
+        return set(self._direct_packages_set)
+
+    @property
     def related_packages(self) -> Set[str]:
         return self._indirect | self._malicious
+
+    # `all_packages` is inherited from the base class, which already composes
+    # it from `direct_packages | related_packages`.
 
     # ── Parsing ──────────────────────────────────────────────────────────
 
@@ -119,7 +129,7 @@ class DataDrivenThreat(ThreatDefinition):
 
         # Direct packages
         if normalized in {d.lower().replace("-", "_") for d in self._direct_packages_set}:
-            if version and version in self._vulnerable_versions:
+            if version and version in self._versions_by_package.get(normalized, set()):
                 suffix = self._note_suffix
                 return (
                     VULNERABLE,

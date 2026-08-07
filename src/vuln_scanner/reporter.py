@@ -86,9 +86,15 @@ def generate_markdown(findings, total_repos, total_files, scanned_repos, output_
     lines.append(f"| スキャン済みファイル数 | {total_files} |")
     lines.append(f"| 検出件数 | {len(findings)} |")
     for threat in threats:
-        pkg = threat.direct_package
-        vers = ", ".join(sorted(threat.vulnerable_versions))
-        lines.append(f"| 脆弱バージョン ({threat.name}) | {pkg} {vers} |")
+        direct_pkgs = sorted(threat.direct_packages)
+        if len(direct_pkgs) > 1:
+            lines.append(
+                f"| 脆弱バージョン ({threat.name}) | {len(direct_pkgs)}パッケージ"
+                "（詳細は「調査対象パッケージ」セクション参照） |"
+            )
+        else:
+            vers = ", ".join(sorted(threat.vulnerable_versions))
+            lines.append(f"| 脆弱バージョン ({threat.name}) | {direct_pkgs[0]} {vers} |")
     lines.append("")
 
     lines.append("## 2. 判定基準")
