@@ -95,10 +95,13 @@ def parse_package_lock_json(
         return results
 
     # v2/v3 format: "packages" key with "node_modules/..." keys
+    # (e.g. "node_modules/keyv" or the scoped "node_modules/@scope/pkg" --
+    # split on the last "node_modules/" segment so scoped names keep their
+    # "@scope/" prefix instead of only the last path component)
     packages = data.get("packages")
     if isinstance(packages, dict):
         for key, info in packages.items():
-            pkg_name = key.rsplit("/", 1)[-1] if "/" in key else key
+            pkg_name = key.rsplit("node_modules/", 1)[-1] if "node_modules/" in key else key
             if pkg_name.lower() in target_packages:
                 ver = info.get("version")
                 results.append((pkg_name.lower(), ver))
@@ -177,12 +180,14 @@ def parse_pnpm_lock(
 ) -> List[Tuple[str, Optional[str]]]:
     """Parse ``pnpm-lock.yaml`` for target npm packages (regex-based).
 
-    Matches patterns like ``/axios@1.14.1:`` or ``axios@1.14.1:``.
+    Matches patterns like ``/axios@1.14.1:``, ``axios@1.14.1:``, and the
+    scoped form ``/@scope/pkg@1.14.1:``.
 
     Returns list of ``(package_name, version_or_None)`` tuples.
     """
     results: List[Tuple[str, Optional[str]]] = []
-    for m in re.finditer(r"/?([a-zA-Z0-9_-]+)@(\d+\.\d+\.\d+[^:]*?):", content):
+    name_pattern = r"@[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+|[a-zA-Z0-9_-]+"
+    for m in re.finditer(rf"/?({name_pattern})@(\d+\.\d+\.\d+[^:]*?):", content):
         pkg = m.group(1).lower()
         ver = m.group(2)
         if pkg in target_packages:
@@ -391,11 +396,10 @@ def check_artifacts(
     paths_to_check: List[str] = []
     raw_paths = artifact_paths.get(system, [])
     for raw in raw_paths:
+        path = os.path.expanduser(raw)
         if system == "Windows":
             # Expand environment variables like %PROGRAMDATA%
-            path = os.path.expandvars(raw)
-        else:
-            path = raw
+            path = os.path.expandvars(path)
         paths_to_check.append(path)
 
     for path in paths_to_check:
