@@ -11,9 +11,15 @@ import logging
 import sys
 import os
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version
 
 from vuln_scanner.threats import get_parser, judge
 from vuln_scanner.reporter import generate_csv, generate_json, generate_markdown, print_summary
+
+try:
+    __version__ = version("vuln-scanner")
+except PackageNotFoundError:
+    __version__ = "unknown"
 
 
 def build_output_dir(scan_label):
@@ -198,6 +204,9 @@ def run_local_scan(args, logger):
 def main():
     parser = argparse.ArgumentParser(
         description="サプライチェーン攻撃スキャナー — LiteLLM (Python) + axios (npm) 対応"
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"vuln-scanner {__version__}"
     )
     parser.add_argument(
         "--output-dir",
