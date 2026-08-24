@@ -158,6 +158,18 @@ def test_semver_ranges_never_assert_safe():
     assert judge("axios", "^2.0.0")[0] == SAFE
     assert judge("axios", "<0.30.0")[0] == SAFE
 
+    # caret-zero soundness (#26): the leftmost non-zero segment rule for
+    # 0.x carets. `^0`/`^0.0` must NOT be treated as pinning only 0.0.0
+    # (which used to skip the range check and return SAFE).
+    from vuln_scanner.threats.base import range_may_include
+    assert range_may_include("^0", {"0.5.0"}) is True
+    assert range_may_include("^0", {"1.0.0"}) is False
+    assert range_may_include("^0.0", {"0.0.5"}) is True
+    assert range_may_include("^0.0", {"0.1.0"}) is False
+    assert range_may_include("^0.2.0", {"0.2.5"}) is True
+    assert range_may_include("^0.2.0", {"0.3.0"}) is False
+    assert range_may_include("^0.0.3", {"0.0.4"}) is False
+
     # Exact pins keep exact semantics (incl. prerelease and PEP508 ==)
     assert judge("axios", "1.14.0")[0] == SAFE
     assert judge("axios", "1.14.1")[0] == VULNERABLE

@@ -125,11 +125,17 @@ def range_may_include(spec: str, versions: Set[str]) -> bool:
         if op == "<":
             return v < base
         if op == "^":
+            # caret pins the leftmost NON-zero segment; for 0.x it
+            # narrows progressively as more zero segments are specified.
             if major > 0:
-                return v[0] == major and v >= base
+                return v[0] == major and v >= base            # ^1.2.3 -> 1.x
             if (minor or 0) > 0:
-                return v[0] == 0 and v[1] == minor and v >= base
-            return v == base
+                return v[0] == 0 and v[1] == minor and v >= base  # ^0.2.3 -> 0.2.x
+            if minor is None:
+                return v[0] == 0 and v >= base                # ^0     -> 0.x.x
+            if patch is None:
+                return v[0] == 0 and v[1] == 0 and v >= base  # ^0.0   -> 0.0.x
+            return v == base                                  # ^0.0.3 -> exactly 0.0.3
         if op == "~":
             if minor is None:
                 return v[0] == major
