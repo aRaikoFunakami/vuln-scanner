@@ -131,14 +131,14 @@ def check_auth():
         print("  Linux: https://github.com/cli/cli/blob/trunk/docs/install_linux.md", file=sys.stderr)
         print("", file=sys.stderr)
         print("インストール後に 'gh auth login' で認証してください。", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     result = subprocess.run(
         ["gh", "auth", "status"], capture_output=True, text=True
     )
     if result.returncode != 0:
         print("Error: gh CLI が認証されていません。", file=sys.stderr)
         print("'gh auth login' を実行してください。", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     # --jq returns raw string, not JSON
     result = subprocess.run(
         ["gh", "api", "/user", "--jq", ".login"],
