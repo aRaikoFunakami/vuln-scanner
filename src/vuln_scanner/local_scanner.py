@@ -16,8 +16,8 @@ from vuln_scanner.threats import (
 from vuln_scanner.threats.base import (
     NOT_ANALYZED,
     VULNERABLE,
-    file_too_large,
     is_within,
+    unreadable_reason,
 )
 
 # Dependency files whose content must be valid JSON; a JSONDecodeError
@@ -113,10 +113,12 @@ def scan_local(root_dir, logger=None):
             not_analyzed(rel_path, "未対応の依存ファイル形式のため解析できませんでした")
             continue
 
-        if file_too_large(file_path):
-            # A hostile repo could ship a multi-GB file named like a
-            # manifest; reading it whole would OOM the scanner (issue #28).
-            not_analyzed(rel_path, "ファイルサイズが上限を超えるため解析をスキップしました")
+        reason = unreadable_reason(file_path)
+        if reason:
+            # A hostile repo could ship a multi-GB file, a fifo, or a
+            # device node named like a manifest; reading it whole would
+            # OOM or hang the scanner (issue #28).
+            not_analyzed(rel_path, f"{reason}解析をスキップしました")
             continue
 
         try:

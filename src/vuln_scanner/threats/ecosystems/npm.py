@@ -16,9 +16,9 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from vuln_scanner.threats.base import (
     NOT_ANALYZED,
-    file_too_large,
     is_within,
     most_severe,
+    unreadable_reason,
 )
 
 # ── File-matching patterns ───────────────────────────────────────────────────
@@ -301,7 +301,10 @@ def _walk_installed_versions(
         if not is_within(pkg_dir, root_dir):
             return
         pkg_json = os.path.join(pkg_dir, "package.json")
-        if file_too_large(pkg_json):
+        reason = unreadable_reason(pkg_json)
+        if reason:
+            if logger:
+                logger.debug(f"    node_modules 走査スキップ ({reason}): {pkg_json}")
             return
         try:
             with open(pkg_json, "r", encoding="utf-8") as f:
@@ -582,8 +585,13 @@ def enrich_findings(
         # at this level, we parse with a broad set by reading all packages.
         # The caller should have already set up appropriate parsers.
         # Use raw parsers with a broad target set.
-        if file_too_large(f):
-            continue  # don't read a hostile multi-GB lockfile whole (#28)
+        skip = unreadable_reason(f)
+        if skip:
+            # oversized / non-regular lockfile: the main dep-file loop
+            # already surfaced it as NOT_ANALYZED, so just skip here (#28)
+            if logger:
+                logger.debug(f"    enrich スキップ ({skip}): {f}")
+            continue
         try:
             with open(f, "r", encoding="utf-8", errors="replace") as fh:
                 content = fh.read()

@@ -10,14 +10,16 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 # ── Filesystem safety (untrusted repos are attacker-controlled input) ────────
 
-# Real lockfiles/manifests are well under this; anything larger is skipped
-# rather than read whole into memory (issue #28, OOM from a hostile 2 GB file).
-MAX_DEP_FILE_BYTES = 5 * 1024 * 1024
+# Large monorepo lockfiles legitimately reach 5-20 MB, so the cap is well
+# above that while still bounding the read of a hostile multi-GB file
+# (issue #28). Parsing a 50 MB JSON peaks at a few hundred MB -- acceptable.
+MAX_DEP_FILE_BYTES = 50 * 1024 * 1024
 
 
 def is_within(path: str, root: str) -> bool:
@@ -33,12 +35,26 @@ def is_within(path: str, root: str) -> bool:
     return path_real == root_real or path_real.startswith(root_real + os.sep)
 
 
-def file_too_large(path: str, limit: int = MAX_DEP_FILE_BYTES) -> bool:
-    """True if *path* is larger than *limit* bytes (missing file -> False)."""
+def unreadable_reason(path: str, limit: int = MAX_DEP_FILE_BYTES) -> Optional[str]:
+    """Return why *path* must not be read whole, or ``None`` if it is safe.
+
+    Guards two hostile-repo cases before any ``read()`` (issue #28):
+    - a non-regular file (fifo/device): ``getsize`` reports 0 but a read
+      blocks forever, so reject anything that is not a regular file;
+    - an oversized file: reject above *limit* rather than OOM.
+
+    ``os.stat`` follows symlinks, so a ``package.json -> /dev/zero`` is
+    caught as non-regular.
+    """
     try:
-        return os.path.getsize(path) > limit
+        st = os.stat(path)
     except OSError:
-        return False
+        return None  # let the caller's own open() handle a missing file
+    if not stat.S_ISREG(st.st_mode):
+        return "通常ファイルではないため"
+    if st.st_size > limit:
+        return "ファイルサイズが上限を超えるため"
+    return None
 
 # ── Verdict constants (canonical location) ──────────────────────────────────
 VULNERABLE = "VULNERABLE"
