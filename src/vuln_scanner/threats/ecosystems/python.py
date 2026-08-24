@@ -187,9 +187,14 @@ def parse_setup_py(
 ) -> List[Tuple[str, Optional[str]]]:
     """Parse ``setup.py`` for ``install_requires``."""
     results: List[Tuple[str, Optional[str]]] = []
-    # Greedy to the LAST "]": an entry like "litellm[proxy]==1.82.7" contains
-    # a "]" that a non-greedy `[^\]]*` truncated at, dropping the version.
-    m = re.search(r"install_requires\s*=\s*\[(.*)\]", content, re.DOTALL)
+    # Capture up to the "]" that closes THIS list -- one followed by a
+    # comma / close-paren / end. A non-greedy `[^\]]*` truncated at the
+    # first "]" (breaking `litellm[proxy]==...`), while a fully greedy
+    # `.*` ran past install_requires into classifiers/comments and
+    # mis-attributed versions from other lists.
+    m = re.search(
+        r"install_requires\s*=\s*\[(.*?)\]\s*(?:[,)]|$)", content, re.DOTALL
+    )
     if m:
         requires_str = m.group(1)
         for pkg in target_packages:
@@ -220,6 +225,10 @@ def parse_setup_cfg(
             stripped = line.strip()
             if not stripped:
                 continue
+            # Drop an environment marker (`; python_version…`) and inline
+            # comment before matching, so the version spec doesn't absorb
+            # them (which would demote an exact vulnerable pin to WARNING).
+            stripped = stripped.split(";", 1)[0].split("#", 1)[0].strip()
             m = re.match(
                 r"([a-zA-Z0-9._-]+)(?:\[[^\]]*\])?\s*([=~!<>^].*)?$",
                 stripped,

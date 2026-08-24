@@ -168,6 +168,12 @@ def test_semver_ranges_never_assert_safe():
     # bare version stored in threats.json (regression: was falsely SAFE)
     assert judge("axios", "v1.14.1")[0] == VULNERABLE
     assert judge("axios", "v1.14.0")[0] == SAFE
+    # Exact pins that are the SAME release as a vulnerable version but not
+    # string-equal must canonicalize before the membership test, or they
+    # slip to SAFE (#26): PEP 440 local metadata and leading zeros.
+    assert judge("axios", "1.14.1+cpu")[0] == VULNERABLE
+    assert judge("axios", "01.14.01")[0] == VULNERABLE
+    assert judge("axios", "1.14.0+cpu")[0] == SAFE  # +meta must not over-match
     pre = parse_package_json(
         '{"dependencies": {"@crawlee/core": "3.17.1-beta.80"}}',
         {"@crawlee/core"},
@@ -221,6 +227,31 @@ def test_python_parsers_preserve_range_operators():
         'dependencies = ["litellm[proxy]==1.82.7"]', {"litellm"})) == VULNERABLE
     assert verdict(parse_pyproject_toml(
         'dependencies = ["litellm>=1.82.0"]', {"litellm"})) == WARNING
+
+    # Regressions found reviewing #25:
+    # PEP 440 local version (+cpu) is the same release as the vulnerable
+    # 1.82.7 -- must not slip to SAFE (canonical_version fix).
+    assert verdict(parse_setup_cfg(
+        "install_requires =\n    litellm==1.82.7+cpu\n", {"litellm"})) == VULNERABLE
+    assert verdict(parse_dockerfile(
+        "RUN pip install litellm==1.82.7+cpu", {"litellm"})) == VULNERABLE
+    # An exact vulnerable pin with an environment marker / inline comment
+    # must stay VULNERABLE, not be demoted to WARNING by the swallowed tail.
+    assert verdict(parse_setup_cfg(
+        'install_requires =\n    litellm==1.82.7; python_version >= "3.8"\n',
+        {"litellm"})) == VULNERABLE
+    assert verdict(parse_setup_cfg(
+        "install_requires =\n    litellm==1.82.7  # keep\n", {"litellm"})) == VULNERABLE
+    # A package name appearing only in a comment / a later list must NOT
+    # be reported as an install_requires dependency (greedy-capture fix).
+    setup_comment = (
+        "setup(\n"
+        '    install_requires=["flask==2.0.0"],  # dropped litellm==1.82.7 (CVE)\n'
+        '    classifiers=["X"],\n'
+        ")\n"
+    )
+    assert parse_setup_py(setup_comment, {"litellm"}) == [], \
+        parse_setup_py(setup_comment, {"litellm"})
 
 
 def test_disk_scan_three_layouts():
