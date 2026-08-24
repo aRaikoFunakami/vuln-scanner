@@ -60,6 +60,12 @@ if _axios:
     AXIOS_ALL_PACKAGES = _axios.all_packages
 
 # ── PARSERS dict (backward compat) ─────────────────────────────────────────
+# Tag each parser with its ecosystem, same as threats.get_parser() (issue
+# #16 follow-up) -- a caller reading PARSERS[...] directly must be able to
+# pass ecosystem=parser.ecosystem to judge() too, or it silently loses the
+# npm/PyPI collision filter this facade's callers can't see is expected.
 PARSERS = {}
 for _t in _threats:
-    PARSERS.update(_t.get_parsers())
+    for _key, _parser in _t.get_parsers().items():
+        _parser.ecosystem = _t.ecosystem  # type: ignore[attr-defined]
+        PARSERS[_key] = _parser

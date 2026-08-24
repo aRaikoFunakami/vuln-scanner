@@ -187,7 +187,7 @@ def generate_markdown(findings, total_repos, total_files, scanned_repos, output_
                         ver_or_vers if isinstance(ver_or_vers, list) else [ver_or_vers]
                     )
                     for ver in versions:
-                        verdict, _ = judge(pkg, ver)
+                        verdict, _ = judge(pkg, ver, ecosystem=eco)
                         lines.append(f"| {pkg} | {ver} | {verdict} |")
                 lines.append("")
 
