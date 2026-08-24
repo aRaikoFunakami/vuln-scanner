@@ -164,17 +164,24 @@ def run_github_scan(args, logger):
         repos = get_user_repos(username, repos_filter)
 
     if repos is None:
-        # Listing failed (rate limit / 403 / bad org). Exiting as an
-        # operational error (2) is correct -- reporting "0 repos, clean"
-        # would hide a scan that never ran (issue #27).
+        # Listing failed (rate limit / 403 / bad org). Surface it as a
+        # NOT_ANALYZED finding rather than reporting "0 repos, clean"
+        # (issue #27) -- consistent with the per-repo tree-fetch failure
+        # below, and, unlike sys.exit(), it does not abort a combined
+        # `--local` scan running in the same invocation.
         logger.error(
             "リポジトリ一覧の取得に失敗しました（レート制限・権限・存在しない対象など）。"
         )
-        print(
-            "Error: リポジトリ一覧を取得できませんでした。対象名・権限・レート制限を確認してください。",
-            file=sys.stderr,
-        )
-        sys.exit(2)
+        target = args.user or args.org or username or "(github)"
+        return [{
+            "repo": target,
+            "file_path": "(リポジトリ一覧)",
+            "package": "(unknown)",
+            "version": None,
+            "verdict": NOT_ANALYZED,
+            "note": "リポジトリ一覧を取得できませんでした（レート制限・権限など）",
+            "source": "github",
+        }], 0, []
 
     logger.info(f"対象リポジトリ数: {len(repos)}")
     logger.debug(f"リポジトリ一覧: {[r['full_name'] for r in repos]}")

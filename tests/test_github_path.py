@@ -137,8 +137,33 @@ def test_normal_repo_still_detects_and_stays_clean():
         gh._run_gh = orig
 
 
+def test_repo_listing_failure_does_not_abort_and_surfaces():
+    """A failed repo listing must surface as a NOT_ANALYZED finding
+    (so a combined --local scan is not aborted by a transient GitHub
+    failure and the failure still shows up), not sys.exit."""
+    import logging
+    import types
+
+    from vuln_scanner import scanner as sc
+
+    orig_auth = gh.check_auth
+    orig_user = gh.get_user_repos
+    logger = logging.getLogger("test_github_path_runscan")
+    logger.addHandler(logging.NullHandler())
+    gh.check_auth = lambda: "me"
+    gh.get_user_repos = lambda username=None, repos_filter=None: None
+    try:
+        args = types.SimpleNamespace(user=None, org=None, repos=None)
+        findings, _files, _repos = sc.run_github_scan(args, logger)
+    finally:
+        gh.check_auth = orig_auth
+        gh.get_user_repos = orig_user
+    assert findings and all(f["verdict"] == "NOT_ANALYZED" for f in findings), findings
+
+
 def main():
     test_large_lockfile_uses_blob_api()
+    test_repo_listing_failure_does_not_abort_and_surfaces()
     test_unfetchable_tree_is_not_analyzed()
     test_unfetchable_content_is_not_analyzed()
     test_repo_listing_failure_distinct_from_empty()
