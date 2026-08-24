@@ -54,6 +54,37 @@ def is_exact_version(spec: str) -> bool:
     return bool(_EXACT_VERSION_RE.match(spec.strip()))
 
 
+def canonical_version(v: str) -> str:
+    """Canonical form for exact-version equality against threats.json.
+
+    ``is_exact_version`` accepts forms that are the SAME release as a
+    stored bare version but not string-equal, so a raw membership test
+    let them slip to SAFE. Normalize them all to the stored shape:
+
+    - drop a leading ``v`` (``v1.14.1``)
+    - drop PEP 440 local/build metadata (``1.14.1+cpu`` -> ``1.14.1``)
+    - drop a PEP 440 epoch (``1!1.14.1`` -> ``1.14.1``; conservative --
+      the safe direction for a scanner is to still match)
+    - strip leading zeros from numeric release segments
+      (``01.14.01`` -> ``1.14.1``)
+
+    Prerelease (``-rc.1``) is part of a version's identity and kept.
+    """
+    v = v.strip()
+    if v[:1] in ("v", "V"):
+        v = v[1:]
+    v = v.split("+", 1)[0]           # local / build metadata
+    # ponytail: epoch strip is currently unreachable from judge() --
+    # is_exact_version rejects the "N!" form, so an epoch pin falls to the
+    # range path (WARNING). Kept so canonical_version stays correct if a
+    # caller ever canonicalizes an epoch string directly.
+    if "!" in v:
+        v = v.split("!", 1)[1]
+    rel, sep, pre = v.partition("-")
+    norm = [str(int(p)) if p.isdigit() else p for p in rel.split(".")]
+    return ".".join(norm) + (sep + pre if sep else "")
+
+
 def _ver_tuple(v: str) -> Optional[Tuple[int, int, int]]:
     m = re.match(r"v?(\d+)\.(\d+)(?:\.(\d+))?", v.strip())
     if not m:

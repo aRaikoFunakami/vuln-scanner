@@ -168,12 +168,90 @@ def test_semver_ranges_never_assert_safe():
     # bare version stored in threats.json (regression: was falsely SAFE)
     assert judge("axios", "v1.14.1")[0] == VULNERABLE
     assert judge("axios", "v1.14.0")[0] == SAFE
+    # Exact pins that are the SAME release as a vulnerable version but not
+    # string-equal must canonicalize before the membership test, or they
+    # slip to SAFE (#26): PEP 440 local metadata and leading zeros.
+    assert judge("axios", "1.14.1+cpu")[0] == VULNERABLE
+    assert judge("axios", "01.14.01")[0] == VULNERABLE
+    assert judge("axios", "1.14.0+cpu")[0] == SAFE  # +meta must not over-match
     pre = parse_package_json(
         '{"dependencies": {"@crawlee/core": "3.17.1-beta.80"}}',
         {"@crawlee/core"},
     )
     assert pre == [("@crawlee/core", "3.17.1-beta.80")], pre
     assert judge("@crawlee/core", "3.17.1-beta.80")[0] == VULNERABLE
+
+
+def test_python_parsers_preserve_range_operators():
+    """Regression guard (#25): setup.py / setup.cfg / Dockerfile /
+    pyproject PEP621-array must keep the range operator so judge() does
+    not mistake `>=1.82.0` for the pinned version 1.82.0 and return SAFE
+    (the #9 fix was only applied to requirements/pyproject-table/Pipfile).
+    Also covers extras `[proxy]` and Dockerfile backslash continuations.
+    """
+    from vuln_scanner.threats.ecosystems.python import (
+        parse_dockerfile,
+        parse_pyproject_toml,
+        parse_setup_cfg,
+        parse_setup_py,
+    )
+
+    # litellm vulnerable: 1.82.7 / 1.82.8. `>=1.82.0` includes them.
+    def verdict(specs):
+        assert specs, "parser returned nothing"
+        return judge("litellm", specs[0][1], ecosystem="python")[0]
+
+    # setup.py: range → WARNING, exact pin → VULNERABLE, extras handled
+    assert verdict(parse_setup_py(
+        'install_requires=["litellm>=1.82.0"]', {"litellm"})) == WARNING
+    assert verdict(parse_setup_py(
+        'install_requires=["litellm[proxy]==1.82.7"]', {"litellm"})) == VULNERABLE
+    # a dependency listed AFTER a bracketed extra must still be found
+    assert verdict(parse_setup_py(
+        'install_requires=["flask[async]>=2.0", "litellm==1.82.7"]',
+        {"litellm"})) == VULNERABLE
+
+    # setup.cfg indented-list form
+    cfg = "install_requires =\n    requests>=2.0\n    litellm>=1.82.0\n"
+    assert verdict(parse_setup_cfg(cfg, {"litellm"})) == WARNING
+
+    # Dockerfile: inline range, exact pin, and backslash continuation
+    assert verdict(parse_dockerfile(
+        "RUN pip install litellm>=1.82.0", {"litellm"})) == WARNING
+    assert verdict(parse_dockerfile(
+        "RUN pip install --no-cache-dir \\\n    litellm==1.82.7 \\\n    requests",
+        {"litellm"})) == VULNERABLE
+
+    # pyproject PEP 621 array with extras / exact pin
+    assert verdict(parse_pyproject_toml(
+        'dependencies = ["litellm[proxy]==1.82.7"]', {"litellm"})) == VULNERABLE
+    assert verdict(parse_pyproject_toml(
+        'dependencies = ["litellm>=1.82.0"]', {"litellm"})) == WARNING
+
+    # Regressions found reviewing #25:
+    # PEP 440 local version (+cpu) is the same release as the vulnerable
+    # 1.82.7 -- must not slip to SAFE (canonical_version fix).
+    assert verdict(parse_setup_cfg(
+        "install_requires =\n    litellm==1.82.7+cpu\n", {"litellm"})) == VULNERABLE
+    assert verdict(parse_dockerfile(
+        "RUN pip install litellm==1.82.7+cpu", {"litellm"})) == VULNERABLE
+    # An exact vulnerable pin with an environment marker / inline comment
+    # must stay VULNERABLE, not be demoted to WARNING by the swallowed tail.
+    assert verdict(parse_setup_cfg(
+        'install_requires =\n    litellm==1.82.7; python_version >= "3.8"\n',
+        {"litellm"})) == VULNERABLE
+    assert verdict(parse_setup_cfg(
+        "install_requires =\n    litellm==1.82.7  # keep\n", {"litellm"})) == VULNERABLE
+    # A package name appearing only in a comment / a later list must NOT
+    # be reported as an install_requires dependency (greedy-capture fix).
+    setup_comment = (
+        "setup(\n"
+        '    install_requires=["flask==2.0.0"],  # dropped litellm==1.82.7 (CVE)\n'
+        '    classifiers=["X"],\n'
+        ")\n"
+    )
+    assert parse_setup_py(setup_comment, {"litellm"}) == [], \
+        parse_setup_py(setup_comment, {"litellm"})
 
 
 def test_disk_scan_three_layouts():
@@ -527,6 +605,7 @@ def main():
     test_enrich_does_not_flip_verdicts()
     test_enrich_most_severe_lock_version()
     test_semver_ranges_never_assert_safe()
+    test_python_parsers_preserve_range_operators()
     test_disk_scan_three_layouts()
     test_disk_scan_no_false_positive_from_subtree()
     test_enrich_findings_handles_multi_version_installed()

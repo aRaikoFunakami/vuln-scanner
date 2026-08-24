@@ -17,6 +17,7 @@ from vuln_scanner.threats.base import (
     VULNERABLE,
     WARNING,
     ThreatDefinition,
+    canonical_version,
     is_exact_version,
     most_severe,
     range_may_include,
@@ -43,10 +44,17 @@ class DataDrivenThreat(ThreatDefinition):
         # Pre-compute package sets
         self._vulnerable_versions: Set[str] = set()
         self._versions_by_package: Dict[str, Set[str]] = {}
+        # Canonicalized vulnerable versions per package: an exact pin like
+        # "1.14.1+cpu" / "v1.14.1" / "01.14.01" is the same release as the
+        # stored "1.14.1" and must not slip to SAFE on a raw string test.
+        self._canon_versions_by_package: Dict[str, Set[str]] = {}
         for pkg_name, versions in data["direct_packages"].items():
             self._vulnerable_versions.update(versions)
             normalized = pkg_name.lower().replace("-", "_")
             self._versions_by_package.setdefault(normalized, set()).update(versions)
+            self._canon_versions_by_package.setdefault(normalized, set()).update(
+                canonical_version(v) for v in versions
+            )
 
         self._direct_packages_set: Set[str] = set(data["direct_packages"].keys())
         self._indirect: Set[str] = set(data.get("indirect_packages", []))
@@ -138,25 +146,30 @@ class DataDrivenThreat(ThreatDefinition):
         # Direct packages
         if normalized in self._direct_normalized:
             vulnerable = self._versions_by_package.get(normalized, set())
+            canon_vulnerable = self._canon_versions_by_package.get(normalized, set())
             if version:
-                # "==1.2.3" (PEP 508) pins exactly like "1.2.3"; a "v"
-                # prefix ("v1.2.3") is also an exact pin -- both must be
-                # normalized before the membership check, or is_exact_version
-                # (which accepts "v1.2.3") reports a vulnerable version as
-                # SAFE because the raw string never matches the bare
-                # version stored in threats.json (issue #9 follow-up).
+                # "==1.2.3" (PEP 508) pins exactly like "1.2.3".
                 version = version.strip()
                 if version.startswith("=="):
                     version = version[2:].strip()
-                if version.startswith(("v", "V")) and is_exact_version(version):
-                    version = version[1:]
+                # Compare exact pins in canonical form: "1.14.1+cpu",
+                # "v1.14.1", "1!1.14.1", "01.14.01" are all the same
+                # release as the stored "1.14.1" and must not slip to
+                # SAFE on a raw string test (issues #9/#25/#26).
+                if is_exact_version(version):
+                    if canonical_version(version) in canon_vulnerable:
+                        return (
+                            VULNERABLE,
+                            f"脆弱バージョン {version} を使用{self._note_suffix}",
+                        )
+                    return SAFE, f"バージョン {version} は安全"
+                # Not an exact pin -- still catch a raw string match (e.g.
+                # a stored prerelease) before treating it as a range.
                 if version in vulnerable:
                     return (
                         VULNERABLE,
                         f"脆弱バージョン {version} を使用{self._note_suffix}",
                     )
-                if is_exact_version(version):
-                    return SAFE, f"バージョン {version} は安全"
                 # Range specifier (^1.14.0, >=1.0, ~=1.82, ...): never
                 # assert SAFE for a range that can resolve to a
                 # vulnerable version (CLAUDE.md レビュー観点4)
