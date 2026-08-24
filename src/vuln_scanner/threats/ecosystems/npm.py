@@ -147,9 +147,17 @@ def parse_yarn_lock(
     in either format: ``version "1.14.1"`` (classic) or
     ``version: 1.14.1`` (berry).
 
-    Returns list of ``(package_name, version_or_None)`` tuples.
+    Returns deduplicated list of ``(package_name, version_or_None)``
+    tuples (berry can list one package under both ``npm:`` and
+    ``virtual:`` headers with the same version).
     """
+    # ponytail: berry alias (`myalias@npm:keyv@6.0.0`) and `patch:`
+    # protocol headers yield names like "myalias@npm:keyv" and are
+    # skipped -- parse the `resolution:` field if alias coverage is
+    # ever needed.  (patch: entries keep their base `npm:` entry, so
+    # only aliased installs are actually missed.)
     results: List[Tuple[str, Optional[str]]] = []
+    seen: set = set()
     current_pkg: Optional[str] = None
     for line in content.splitlines():
         # Header line: "axios@^1.14.0:" or "axios@^1.14.0, axios@^1.0.0:"
@@ -158,22 +166,24 @@ def parse_yarn_lock(
             parts = [p.strip().strip('"') for p in header.split(",")]
             pkg_name: Optional[str] = None
             for part in parts:
+                # rfind: the last "@" separates name from range/version,
+                # so scoped names ("@scope/pkg@^1.0.0") keep their scope
                 at_idx = part.rfind("@")
-                if at_idx > 0:
-                    name = part[:at_idx]
-                elif at_idx == 0:
-                    # Scoped package like @scope/pkg -- skip for now
-                    continue
-                else:
-                    name = part
+                name = part[:at_idx] if at_idx > 0 else part
                 if name.lower() in target_packages:
                     pkg_name = name.lower()
                     break
             current_pkg = pkg_name
         elif current_pkg and line.strip().startswith("version"):
             m = re.match(r'\s+version:?\s+"?([^"\s]+)"?', line)
-            if m:
-                results.append((current_pkg, m.group(1)))
+            # "0.0.0-use.local" is berry's placeholder for workspace:/
+            # portal:/link: entries, not an installed version -- emitting
+            # it would judge the package SAFE with a fabricated version
+            if m and m.group(1) != "0.0.0-use.local":
+                pair = (current_pkg, m.group(1))
+                if pair not in seen:
+                    seen.add(pair)
+                    results.append(pair)
             current_pkg = None
     return results
 

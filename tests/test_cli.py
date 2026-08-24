@@ -43,6 +43,7 @@ def run_scan(project_dir):
 #   a genuinely compromised machine, which is the scanner working.
 CASES = [
     ("e2e-npm", 1, "keyv"),
+    ("e2e-yarn", 1, "keyv"),
     ("e2e-python", 1, "litellm"),
     ("e2e-clean", 0, "スキャン対象ファイル数: 2"),
 ]

@@ -193,8 +193,28 @@ def main():
     # parser previously could not read at all -- not even as WARNING.
     for gen in ("classic", "berry"):
         with open(_fixture(f"yarn-{gen}.lock")) as f:
-            parsed = parse_yarn_lock(f.read(), lock_targets)
-        assert sorted(parsed) == lock_expected, (gen, parsed)
+            yarn_content = f.read()
+        parsed = parse_yarn_lock(yarn_content, lock_targets)
+        assert parsed == lock_expected, (gen, parsed)
+
+    # Berry workspace entries carry the placeholder version
+    # "0.0.0-use.local"; emitting it would judge the package SAFE with a
+    # fabricated version.  (yarn_content still holds the berry fixture,
+    # whose workspace entry is named "fixture".)
+    assert parse_yarn_lock(yarn_content, {"fixture"}) == []
+
+    # Berry v2/v3 lists one package under both npm: and virtual: headers
+    # with the same version -- must be reported once.  (Synthetic
+    # snippet: yarn 4 no longer emits virtual: entries.)
+    virtual_dup = (
+        '"react-dom@npm:18.3.1":\n'
+        "  version: 18.3.1\n"
+        '"react-dom@virtual:9f2b8c#npm:18.3.1":\n'
+        "  version: 18.3.1\n"
+    )
+    assert parse_yarn_lock(virtual_dup, {"react-dom"}) == [
+        ("react-dom", "18.3.1")
+    ]
 
     # Negative space: keys outside the `packages:` section must not be
     # reported -- `overrides:` names a version that is not necessarily
