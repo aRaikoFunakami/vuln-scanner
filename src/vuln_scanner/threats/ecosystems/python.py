@@ -43,6 +43,18 @@ FILE_PATTERNS_REGEX: List[re.Pattern[str]] = [
 # ── Parser functions ─────────────────────────────────────────────────────────
 
 
+def _raw_spec(spec: Optional[str]) -> Optional[str]:
+    """Return a captured version specifier verbatim, or ``None`` if absent.
+
+    Keeping the operator (``>=1.82.0``, ``^1.82``, ``@ git+...``) is what
+    lets ``judge()`` tell a range from a pinned version -- stripping it
+    made ranges that resolve to a vulnerable version judged SAFE
+    (issue #9, and its leftover in setup.py/setup.cfg/Dockerfile in #25).
+    """
+    s = (spec or "").strip()
+    return s or None
+
+
 def parse_requirements_txt(
     content: str,
     target_packages: Set[str],
@@ -91,7 +103,10 @@ def parse_pyproject_toml(
     results: List[Tuple[str, Optional[str]]] = []
     for pkg in target_packages:
         patterns = [
-            rf'["\']({re.escape(pkg)})\s*([=~!<>^][^"\']*)?["\']',
+            # PEP 621 array form: "litellm>=1.82.0", "litellm[proxy]==1.82.7",
+            # "litellm @ git+https://...". Skip an optional [extras] group,
+            # then capture the raw spec (operator + version, or @ url).
+            rf'''["']({re.escape(pkg)})(?:\[[^\]]*\])?\s*([=~!<>^@][^"']*)?["']''',
             rf"^{re.escape(pkg)}\s*=\s*[\"']([^\"']*)[\"']",
             rf"^{re.escape(pkg)}\s*=\s*\{{[^}}]*version\s*=\s*[\"']([^\"']*)[\"']",
         ]
@@ -99,8 +114,7 @@ def parse_pyproject_toml(
             for m in re.finditer(pattern, content, re.MULTILINE | re.IGNORECASE):
                 groups = m.groups()
                 spec = groups[1] if len(groups) >= 2 else groups[0]
-                ver = (spec or "").strip() or None
-                results.append((pkg, ver))
+                results.append((pkg, _raw_spec(spec)))
     return results
 
 
@@ -173,18 +187,19 @@ def parse_setup_py(
 ) -> List[Tuple[str, Optional[str]]]:
     """Parse ``setup.py`` for ``install_requires``."""
     results: List[Tuple[str, Optional[str]]] = []
-    m = re.search(r"install_requires\s*=\s*\[([^\]]*)\]", content, re.DOTALL)
+    # Greedy to the LAST "]": an entry like "litellm[proxy]==1.82.7" contains
+    # a "]" that a non-greedy `[^\]]*` truncated at, dropping the version.
+    m = re.search(r"install_requires\s*=\s*\[(.*)\]", content, re.DOTALL)
     if m:
         requires_str = m.group(1)
         for pkg in target_packages:
             pkg_m = re.search(
-                rf'["\']({re.escape(pkg)})\s*(?:[=~!<>]=?\s*([0-9][0-9a-zA-Z._-]*))?["\']',
+                rf'''["']({re.escape(pkg)})(?:\[[^\]]*\])?\s*([=~!<>^@][^"']*)?["']''',
                 requires_str,
                 re.IGNORECASE,
             )
             if pkg_m:
-                ver = pkg_m.group(2)
-                results.append((pkg, ver))
+                results.append((pkg, _raw_spec(pkg_m.group(2))))
     return results
 
 
@@ -196,21 +211,23 @@ def parse_setup_cfg(
     results: List[Tuple[str, Optional[str]]] = []
     in_install = False
     for line in content.splitlines():
-        if line.strip() == "install_requires =":
+        if re.match(r"\s*install_requires\s*=\s*$", line):
             in_install = True
             continue
         if in_install:
             if line and not line[0].isspace():
                 break
             stripped = line.strip()
+            if not stripped:
+                continue
             m = re.match(
-                r"([a-zA-Z0-9_-]+)\s*(?:[=~!<>]=?\s*([0-9][0-9a-zA-Z._-]*))?",
+                r"([a-zA-Z0-9._-]+)(?:\[[^\]]*\])?\s*([=~!<>^].*)?$",
                 stripped,
             )
             if m:
                 pkg = m.group(1).lower().replace("-", "_")
-                if pkg in target_packages:
-                    results.append((pkg, m.group(2)))
+                if pkg in target_packages or pkg.replace("_", "-") in target_packages:
+                    results.append((pkg, _raw_spec(m.group(2))))
     return results
 
 
@@ -220,17 +237,21 @@ def parse_dockerfile(
 ) -> List[Tuple[str, Optional[str]]]:
     """Parse ``Dockerfile`` for ``pip install`` commands."""
     results: List[Tuple[str, Optional[str]]] = []
-    for line in content.splitlines():
+    # Join backslash line continuations first: `RUN pip install \` puts the
+    # actual packages on following lines that the per-line scan would miss.
+    joined = re.sub(r"\\\s*\n", " ", content)
+    for line in joined.splitlines():
         if "pip install" not in line.lower():
             continue
         for pkg in target_packages:
             m = re.search(
-                rf"({re.escape(pkg)})\s*(?:[=~!<>]=?\s*([0-9][0-9a-zA-Z._-]*))?",
+                rf"({re.escape(pkg)})(?:\[[^\]]*\])?\s*"
+                rf"([=~!<>^]=?\s*[0-9][0-9a-zA-Z._+!-]*)?",
                 line,
                 re.IGNORECASE,
             )
             if m:
-                results.append((pkg, m.group(2)))
+                results.append((pkg, _raw_spec(m.group(2))))
     return results
 
 
