@@ -74,7 +74,11 @@ def canonical_version(v: str) -> str:
     if v[:1] in ("v", "V"):
         v = v[1:]
     v = v.split("+", 1)[0]           # local / build metadata
-    if "!" in v:                     # epoch
+    # ponytail: epoch strip is currently unreachable from judge() --
+    # is_exact_version rejects the "N!" form, so an epoch pin falls to the
+    # range path (WARNING). Kept so canonical_version stays correct if a
+    # caller ever canonicalizes an epoch string directly.
+    if "!" in v:
         v = v.split("!", 1)[1]
     rel, sep, pre = v.partition("-")
     norm = [str(int(p)) if p.isdigit() else p for p in rel.split(".")]
