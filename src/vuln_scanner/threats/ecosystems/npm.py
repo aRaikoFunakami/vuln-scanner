@@ -14,7 +14,7 @@ import shutil
 import subprocess
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from vuln_scanner.threats.base import most_severe
+from vuln_scanner.threats.base import NOT_ANALYZED, most_severe
 
 # ── File-matching patterns ───────────────────────────────────────────────────
 
@@ -598,6 +598,8 @@ def enrich_findings(
     for finding in findings:
         if finding["source"] != "dependency_file":
             continue
+        if finding["verdict"] == NOT_ANALYZED:
+            continue  # package.json itself failed to parse -- nothing to enrich
 
         file_basename = os.path.basename(finding["file_path"])
         if file_basename != "package.json":

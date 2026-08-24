@@ -78,53 +78,57 @@ def scan_local(root_dir, logger=None):
             if dirs_without:
                 logger.info(f"  依存ファイルなし ({len(dirs_without)}件): {dirs_without}")
 
+    def not_analyzed(rel_path, reason):
+        # "not analyzed" must never look like "clean" -- give it its own
+        # finding rather than silently `continue`ing past the file
+        # (CLAUDE.md レビュー観点2, issue #11).
+        findings.append({
+            "repo": root_dir,
+            "file_path": rel_path,
+            "package": "(unknown)",
+            "version": None,
+            "verdict": NOT_ANALYZED,
+            "note": reason,
+            "source": "dependency_file",
+        })
+        if logger:
+            logger.warning(f"    {rel_path}: {reason} → NOT_ANALYZED")
+
     for file_path in dep_files:
         rel_path = os.path.relpath(file_path, root_dir)
         parser = get_parser(file_path)
         if not parser:
             # Recognized as a dependency file (matched a threat's glob
             # pattern) but no ecosystem module understands its format
-            # (e.g. a future lockfile generation). Surface it rather
-            # than silently skipping -- "not analyzed" must not look
-            # like "clean" (CLAUDE.md レビュー観点2, issue #11).
-            findings.append({
-                "repo": root_dir,
-                "file_path": rel_path,
-                "package": "(unknown)",
-                "version": None,
-                "verdict": NOT_ANALYZED,
-                "note": "未対応の依存ファイル形式のため解析できませんでした",
-                "source": "dependency_file",
-            })
-            if logger:
-                logger.warning(f"    {rel_path}: パーサーなし → NOT_ANALYZED")
+            # (e.g. a future lockfile generation).
+            not_analyzed(rel_path, "未対応の依存ファイル形式のため解析できませんでした")
             continue
 
         try:
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
-        except OSError:
+        except OSError as e:
+            not_analyzed(rel_path, f"ファイルを読み込めませんでした（{e.__class__.__name__}）")
             continue
 
         if logger:
             logger.debug(f"    {rel_path}: パース中 ({len(content)} bytes)")
 
+        # ponytail: NOT_ANALYZED currently only covers "no parser" and
+        # "JSON parse failure" -- a non-JSON lockfile whose CONTENT is
+        # in an unrecognized sub-format (e.g. a future yarn.lock/
+        # pnpm-lock.yaml variant) still silently parses to 0 matches.
+        # Not covered because "0 packages found" is also the normal,
+        # correct output for a genuinely dependency-free file, and a
+        # blanket "non-empty file, 0 total entries" heuristic would
+        # false-positive on those. Revisit if a real format-quirk case
+        # like that shows up (see issue #11 discussion).
         basename = os.path.basename(file_path)
         if basename in _JSON_DEPENDENCY_BASENAMES and content.strip():
             try:
                 json.loads(content)
             except (json.JSONDecodeError, ValueError):
-                findings.append({
-                    "repo": root_dir,
-                    "file_path": rel_path,
-                    "package": "(unknown)",
-                    "version": None,
-                    "verdict": NOT_ANALYZED,
-                    "note": "JSON として解析できませんでした（破損または不正な形式）",
-                    "source": "dependency_file",
-                })
-                if logger:
-                    logger.warning(f"    {rel_path}: JSON 解析失敗 → NOT_ANALYZED")
+                not_analyzed(rel_path, "JSON として解析できませんでした（破損または不正な形式）")
                 continue
 
         packages = parser(content)

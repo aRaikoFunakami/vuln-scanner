@@ -261,6 +261,41 @@ def test_not_analyzed_never_looks_clean():
     clean_findings, _f, _i = scan_local(_fixture("e2e-clean"), None)
     assert not any(f["verdict"] == NOT_ANALYZED for f in clean_findings), clean_findings
 
+    # Regression: the markdown 判定別サマリー table must show
+    # NOT_ANALYZED, not silently omit it (a hardcoded 4-verdict list
+    # used to drop it entirely).
+    import tempfile
+
+    from vuln_scanner.reporter import generate_markdown
+
+    with tempfile.TemporaryDirectory() as out:
+        md_path = os.path.join(out, "r.md")
+        generate_markdown(
+            findings, 1, 1, [{"full_name": "/x", "archived": False}],
+            md_path, installed_info=[],
+        )
+        with open(md_path) as f:
+            assert "| NOT_ANALYZED |" in f.read()
+
+    # Regression: an unreadable dependency file (permission denied,
+    # broken symlink) must also surface as NOT_ANALYZED, not be
+    # silently dropped -- the same "looks clean" failure mode this test
+    # guards against, just via OSError instead of a parse error.
+    import stat
+
+    with tempfile.TemporaryDirectory() as root:
+        pkg = os.path.join(root, "package.json")
+        with open(pkg, "w") as f:
+            f.write('{"dependencies": {"axios": "1.14.1"}}')
+        os.chmod(pkg, 0)
+        try:
+            unreadable_findings, _f2, _i2 = scan_local(root, None)
+        finally:
+            os.chmod(pkg, stat.S_IRUSR | stat.S_IWUSR)
+    assert any(f["verdict"] == NOT_ANALYZED for f in unreadable_findings), (
+        unreadable_findings
+    )
+
 
 def test_judge_worst_verdict_wins():
     """judge() must consult ALL owning threats (worst verdict wins) and

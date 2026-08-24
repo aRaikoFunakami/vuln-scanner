@@ -113,7 +113,7 @@ def generate_markdown(findings, total_repos, total_files, scanned_repos, output_
     if findings:
         lines.append("| 判定 | 件数 |")
         lines.append("|------|------|")
-        for verdict in ["VULNERABLE", "WARNING", "CHECK_INDIRECT", "SAFE"]:
+        for verdict in ["VULNERABLE", "NOT_ANALYZED", "WARNING", "CHECK_INDIRECT", "SAFE"]:
             if verdicts.get(verdict, 0) > 0:
                 lines.append(f"| {verdict} | {verdicts[verdict]} |")
     else:
