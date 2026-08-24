@@ -123,8 +123,12 @@ def generate_markdown(findings, total_repos, total_files, scanned_repos, output_
     # Use a running section counter
     sec = 3
 
-    # VULNERABLE details
-    vulns = [f for f in findings if f["verdict"] == "VULNERABLE"]
+    # VULNERABLE details -- repo-scoped only; host malware artifacts get
+    # their own reference section below (issue #29).
+    vulns = [
+        f for f in findings
+        if f["verdict"] == "VULNERABLE" and f.get("source") != "malware_artifact"
+    ]
     if vulns:
         sec += 1
         lines.append(f"## {sec}. 脆弱バージョン検出（要即時対応）")
@@ -136,6 +140,24 @@ def generate_markdown(findings, total_repos, total_files, scanned_repos, output_
         lines.append("")
         lines.append("> **対応必須**: 上記のシステムでは、アクセス可能だった全認証情報（SSH鍵、AWS/GCP/Azure クレデンシャル、npm/GitHubトークン、.env 内 API キー等）の即時ローテーションと、安全なバージョンへの移行が必要です。")
         lines.append("> axios 脆弱バージョンの場合は `node_modules` と `package-lock.json` を削除し `npm ci` でクリーン再構築してください。")
+        lines.append("")
+
+    # Host-level malware artifacts: reference information about the
+    # machine, not a scanned-repo vulnerability, and excluded from the
+    # exit-code gate (issue #29).
+    host_artifacts = [f for f in findings if f.get("source") == "malware_artifact"]
+    if host_artifacts:
+        sec += 1
+        lines.append(f"## {sec}. ホスト上のマルウェア痕跡（参考情報）")
+        lines.append("")
+        lines.append("> スキャン対象リポジトリの脆弱性ではなく、実行ホストの状態です。終了コードには影響しません。ホスト側で手動確認してください。")
+        lines.append("")
+        lines.append("| パス | プラットフォーム |")
+        lines.append("|------|----------------|")
+        for a in host_artifacts:
+            note = a.get("note", "")
+            platform_label = note.split("(", 1)[-1].split(")", 1)[0] if "(" in note else ""
+            lines.append(f"| {a['file_path']} | {platform_label} |")
         lines.append("")
 
     # All findings detail
@@ -327,12 +349,22 @@ def print_summary(findings, total_repos, total_files):
         mark = "!!" if verdict == "VULNERABLE" else "  "
         print(f"  {mark} {verdict}: {count}件")
 
-    # Show VULNERABLE details
-    vulns = [f for f in findings if f["verdict"] == "VULNERABLE"]
+    # Show VULNERABLE details -- repo-scoped vulnerabilities drive the
+    # exit code; host-level malware artifacts are reported separately as
+    # reference information and do NOT (issue #29).
+    vulns = [
+        f for f in findings
+        if f["verdict"] == "VULNERABLE" and f.get("source") != "malware_artifact"
+    ]
+    host_artifacts = [f for f in findings if f.get("source") == "malware_artifact"]
     if vulns:
         print("\n*** 脆弱バージョン検出 ***")
         for v in vulns:
             print(f"  {v['repo']} / {v['file_path']}")
             print(f"    {v['package']}=={v['version']} → 即時対応が必要")
+    if host_artifacts:
+        print("\n*** ホスト上のマルウェア痕跡（参考情報・終了コードには影響しません） ***")
+        for a in host_artifacts:
+            print(f"  {a['file_path']} → ホストの手動確認を推奨")
 
     print("=" * 60)
