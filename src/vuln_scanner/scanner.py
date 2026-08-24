@@ -13,7 +13,7 @@ import os
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 
-from vuln_scanner.threats import get_parser, judge
+from vuln_scanner.threats import VULNERABLE, get_parser, judge
 from vuln_scanner.reporter import generate_csv, generate_json, generate_markdown, print_summary
 
 try:
@@ -306,6 +306,13 @@ def main():
     logger.info(f"  結果 (JSON):         {json_path}")
     logger.info(f"  調査ログ:            {log_path}")
 
+    # CI gate: non-zero exit when vulnerable findings exist.
+    # (exit code 2 is reserved for "dependency files found but not
+    # analyzable" -- issue #11)
+    if any(f.get("verdict") == VULNERABLE for f in all_findings):
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
