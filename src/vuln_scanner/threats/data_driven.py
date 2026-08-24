@@ -190,9 +190,15 @@ class DataDrivenThreat(ThreatDefinition):
         logger: Any = None,
     ) -> None:
         if hasattr(self._eco, "enrich_findings"):
+            # Judge across ALL registered threats, not just this one:
+            # self.judge returns SAFE for packages outside this threat's
+            # scope, so passing it here lets the last-enriched threat
+            # overwrite other threats' VULNERABLE verdicts (issue #5).
+            from vuln_scanner.threats import judge as cross_threat_judge
+
             self._eco.enrich_findings(
                 findings, installed_info, dep_files, root_dir,
-                self.judge, logger,
+                cross_threat_judge, logger,
             )
 
     # ── Report text ──────────────────────────────────────────────────────

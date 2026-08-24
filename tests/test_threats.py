@@ -17,6 +17,47 @@ from vuln_scanner.threats.ecosystems.npm import (  # noqa: E402
 )
 
 
+def test_enrich_does_not_flip_verdicts():
+    """Regression guard (#5): an unrelated threat's enrich_findings must
+    judge across all registered threats -- its own judge returns SAFE for
+    out-of-scope packages, which used to flip existing VULNERABLE verdicts
+    when a new npm threat was appended to threats.json."""
+    import json
+    import tempfile
+
+    from vuln_scanner.threats.data_driven import DataDrivenThreat
+    from vuln_scanner.threats.ecosystems import npm as npm_eco
+
+    dummy = DataDrivenThreat(
+        {
+            "name": "unrelated-example",
+            "ecosystem": "npm",
+            "direct_packages": {"lodash": ["4.99.99"]},
+        },
+        npm_eco,
+    )
+
+    with tempfile.TemporaryDirectory() as root:
+        lock_path = os.path.join(root, "package-lock.json")
+        with open(lock_path, "w") as f:
+            json.dump(
+                {"packages": {"node_modules/keyv": {"version": "6.0.0"}}}, f
+            )
+        findings = [{
+            "repo": root,
+            "file_path": "package.json",
+            "package": "keyv",
+            "version": None,
+            "verdict": "WARNING",
+            "note": "",
+            "source": "dependency_file",
+        }]
+        dummy.enrich_findings(findings, [], [lock_path], root)
+
+    assert findings[0]["version"] == "6.0.0", findings[0]
+    assert findings[0]["verdict"] == "VULNERABLE", findings[0]
+
+
 def main():
     threats = {t.name: t for t in get_all_threats()}
 
@@ -59,6 +100,8 @@ def main():
     assert axios.all_packages == {"axios", "plain-crypto-js"}
     assert judge("axios", "1.14.1")[0] == "VULNERABLE"
     assert judge("plain-crypto-js", None)[0] == "VULNERABLE"
+
+    test_enrich_does_not_flip_verdicts()
 
     print("OK")
 
