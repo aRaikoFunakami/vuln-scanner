@@ -13,7 +13,7 @@ import os
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 
-from vuln_scanner.threats import VULNERABLE, get_parser, judge
+from vuln_scanner.threats import NOT_ANALYZED, VULNERABLE, get_parser, judge
 from vuln_scanner.reporter import generate_csv, generate_json, generate_markdown, print_summary
 
 try:
@@ -308,9 +308,15 @@ def main():
 
     # CI gate.  Exit codes: 0 = clean, 1 = VULNERABLE findings,
     # 2 = operational error (argparse usage errors and gh auth failures
-    # already use 2), 3 = reserved for "dependency files found but not
-    # analyzable" (issue #11).
-    return 1 if any(f["verdict"] == VULNERABLE for f in all_findings) else 0
+    # already use 2), 3 = dependency files were found but could not be
+    # analyzed (judgment withheld -- issue #11), and no VULNERABLE
+    # finding overrode that. VULNERABLE always wins: a real detection
+    # must never be masked by an unrelated parse failure elsewhere.
+    if any(f["verdict"] == VULNERABLE for f in all_findings):
+        return 1
+    if any(f["verdict"] == NOT_ANALYZED for f in all_findings):
+        return 3
+    return 0
 
 
 if __name__ == "__main__":

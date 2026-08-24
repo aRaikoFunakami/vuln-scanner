@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from vuln_scanner.threats import (  # noqa: E402
+    NOT_ANALYZED,
     SAFE,
     VULNERABLE,
     WARNING,
@@ -245,6 +246,22 @@ def test_enrich_findings_handles_multi_version_installed():
     assert any(f["verdict"] == VULNERABLE for f in keyv_hits), findings
 
 
+def test_not_analyzed_never_looks_clean():
+    """CLAUDE.md レビュー観点2 (#11): a dependency file that could not be
+    parsed must not be indistinguishable from a genuinely clean scan."""
+    from vuln_scanner.local_scanner import scan_local
+
+    findings, _files, _installed = scan_local(_fixture("disk-corrupted-json"), None)
+    not_analyzed = [f for f in findings if f["verdict"] == NOT_ANALYZED]
+    assert not_analyzed, findings
+    assert not_analyzed[0]["file_path"] == "package.json", not_analyzed
+
+    # A genuinely clean, valid, dependency-free project must NOT be
+    # flagged -- NOT_ANALYZED means "could not read", not "found nothing"
+    clean_findings, _f, _i = scan_local(_fixture("e2e-clean"), None)
+    assert not any(f["verdict"] == NOT_ANALYZED for f in clean_findings), clean_findings
+
+
 def test_judge_worst_verdict_wins():
     """judge() must consult ALL owning threats (worst verdict wins) and
     honor the ecosystem filter -- npm and PyPI names collide."""
@@ -365,6 +382,7 @@ def main():
     test_disk_scan_three_layouts()
     test_disk_scan_no_false_positive_from_subtree()
     test_enrich_findings_handles_multi_version_installed()
+    test_not_analyzed_never_looks_clean()
     test_judge_worst_verdict_wins()
 
     print("OK")

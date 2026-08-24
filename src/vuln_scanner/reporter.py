@@ -105,6 +105,7 @@ def generate_markdown(findings, total_repos, total_files, scanned_repos, output_
     lines.append("| SAFE | 対象パッケージを使用しているが安全なバージョン |")
     lines.append("| WARNING | バージョン未指定で使用（脆弱バージョンがインストールされた可能性あり） |")
     lines.append("| CHECK_INDIRECT | 間接依存として脆弱パッケージを利用するパッケージを検出（手動確認推奨） |")
+    lines.append("| NOT_ANALYZED | 依存ファイルを認識したが解析できなかった（要手動確認） |")
     lines.append("")
 
     lines.append("## 3. 判定別サマリー")

@@ -4,6 +4,7 @@ Generic scanner that delegates ecosystem-specific logic to threat modules.
 """
 
 import glob
+import json
 import os
 
 from vuln_scanner.threats import (
@@ -12,7 +13,12 @@ from vuln_scanner.threats import (
     get_parser,
     judge,
 )
-from vuln_scanner.threats.base import VULNERABLE
+from vuln_scanner.threats.base import NOT_ANALYZED, VULNERABLE
+
+# Dependency files whose content must be valid JSON; a JSONDecodeError
+# here is a genuine "could not analyze" signal, not a coincidental zero
+# match (issue #11).
+_JSON_DEPENDENCY_BASENAMES = {"package.json", "package-lock.json", "Pipfile.lock"}
 
 
 def find_dependency_files(root_dir):
@@ -73,8 +79,25 @@ def scan_local(root_dir, logger=None):
                 logger.info(f"  依存ファイルなし ({len(dirs_without)}件): {dirs_without}")
 
     for file_path in dep_files:
+        rel_path = os.path.relpath(file_path, root_dir)
         parser = get_parser(file_path)
         if not parser:
+            # Recognized as a dependency file (matched a threat's glob
+            # pattern) but no ecosystem module understands its format
+            # (e.g. a future lockfile generation). Surface it rather
+            # than silently skipping -- "not analyzed" must not look
+            # like "clean" (CLAUDE.md レビュー観点2, issue #11).
+            findings.append({
+                "repo": root_dir,
+                "file_path": rel_path,
+                "package": "(unknown)",
+                "version": None,
+                "verdict": NOT_ANALYZED,
+                "note": "未対応の依存ファイル形式のため解析できませんでした",
+                "source": "dependency_file",
+            })
+            if logger:
+                logger.warning(f"    {rel_path}: パーサーなし → NOT_ANALYZED")
             continue
 
         try:
@@ -83,9 +106,26 @@ def scan_local(root_dir, logger=None):
         except OSError:
             continue
 
-        rel_path = os.path.relpath(file_path, root_dir)
         if logger:
             logger.debug(f"    {rel_path}: パース中 ({len(content)} bytes)")
+
+        basename = os.path.basename(file_path)
+        if basename in _JSON_DEPENDENCY_BASENAMES and content.strip():
+            try:
+                json.loads(content)
+            except (json.JSONDecodeError, ValueError):
+                findings.append({
+                    "repo": root_dir,
+                    "file_path": rel_path,
+                    "package": "(unknown)",
+                    "version": None,
+                    "verdict": NOT_ANALYZED,
+                    "note": "JSON として解析できませんでした（破損または不正な形式）",
+                    "source": "dependency_file",
+                })
+                if logger:
+                    logger.warning(f"    {rel_path}: JSON 解析失敗 → NOT_ANALYZED")
+                continue
 
         packages = parser(content)
         for pkg_name, version in packages:
