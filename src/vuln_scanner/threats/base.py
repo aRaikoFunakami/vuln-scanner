@@ -8,9 +8,53 @@ Compatible with Python 3.9+.
 
 from __future__ import annotations
 
+import os
 import re
+import stat
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+
+# ── Filesystem safety (untrusted repos are attacker-controlled input) ────────
+
+# Large monorepo lockfiles legitimately reach 5-20 MB, so the cap is well
+# above that while still bounding the read of a hostile multi-GB file
+# (issue #28). Parsing a 50 MB JSON peaks at a few hundred MB -- acceptable.
+MAX_DEP_FILE_BYTES = 50 * 1024 * 1024
+
+
+def is_within(path: str, root: str) -> bool:
+    """True if *path* resolves to a location inside *root* (symlink-safe).
+
+    Both sides go through ``os.path.realpath`` so a symlink escaping the
+    scan root (``repo/evil -> /``) is rejected: a hostile repo must not
+    make the scanner read or attribute files outside the directory it was
+    pointed at (issue #28).
+    """
+    root_real = os.path.realpath(root)
+    path_real = os.path.realpath(path)
+    return path_real == root_real or path_real.startswith(root_real + os.sep)
+
+
+def unreadable_reason(path: str, limit: int = MAX_DEP_FILE_BYTES) -> Optional[str]:
+    """Return why *path* must not be read whole, or ``None`` if it is safe.
+
+    Guards two hostile-repo cases before any ``read()`` (issue #28):
+    - a non-regular file (fifo/device): ``getsize`` reports 0 but a read
+      blocks forever, so reject anything that is not a regular file;
+    - an oversized file: reject above *limit* rather than OOM.
+
+    ``os.stat`` follows symlinks, so a ``package.json -> /dev/zero`` is
+    caught as non-regular.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None  # let the caller's own open() handle a missing file
+    if not stat.S_ISREG(st.st_mode):
+        return "通常ファイルではないため"
+    if st.st_size > limit:
+        return "ファイルサイズが上限を超えるため"
+    return None
 
 # ── Verdict constants (canonical location) ──────────────────────────────────
 VULNERABLE = "VULNERABLE"
