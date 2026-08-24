@@ -162,85 +162,111 @@ def _filter_repos(repos, repos_filter):
     ]
 
 
-def get_user_repos(username=None, repos_filter=None):
-    """Get all repositories for the authenticated user.
+# Each getter returns None when the listing could not be fetched (rate
+# limit / auth / 404), so the caller can tell that apart from a genuinely
+# empty result and not report a failed scan as "clean" (issue #27). A
+# real empty listing comes back as [] because the --jq always emits an
+# array on success.
 
-    Returns repos the authenticated user has access to (personal + orgs).
-    """
+
+def get_user_repos(username=None, repos_filter=None):
+    """Get all repositories for the authenticated user, or None on failure."""
     data = _run_gh([
         "api", "/user/repos",
         "--paginate",
         "--jq", _REPO_JQ,
     ])
-    return _filter_repos(data or [], repos_filter)
+    return None if data is None else _filter_repos(data, repos_filter)
 
 
 def get_specific_user_repos(username, repos_filter=None):
-    """Get public repositories for a specific GitHub user.
-
-    Uses /users/{username}/repos endpoint.
-    """
+    """Get public repositories for a specific GitHub user, or None on failure."""
     data = _run_gh([
         "api", f"/users/{username}/repos",
         "--paginate",
         "--jq", _REPO_JQ,
     ])
-    return _filter_repos(data or [], repos_filter)
+    return None if data is None else _filter_repos(data, repos_filter)
 
 
 def get_org_repos(org, repos_filter=None):
-    """Get repositories for a GitHub organization.
-
-    Uses /orgs/{org}/repos endpoint.
-    """
+    """Get repositories for a GitHub organization, or None on failure."""
     data = _run_gh([
         "api", f"/orgs/{org}/repos",
         "--paginate",
         "--jq", _REPO_JQ,
     ])
-    return _filter_repos(data or [], repos_filter)
+    return None if data is None else _filter_repos(data, repos_filter)
 
 
 def get_dependency_files(owner_repo, default_branch):
-    """Get dependency file paths from a repository using Tree API.
+    """Get dependency-file entries from a repository using the Tree API.
 
     Returns:
-        List of file paths that match dependency file patterns.
+        ``None`` if the file list could not be fetched (rate limit, API
+        error, empty repo) -- so the caller can tell "could not analyze"
+        from "no dependency files" (issue #27) -- otherwise a list of
+        ``{"path", "sha", "size"}`` dicts (possibly empty).
     """
     data = _run_gh([
         "api",
         f"/repos/{owner_repo}/git/trees/{default_branch}?recursive=1",
     ], ignore_errors=True)
 
-    if not data or "tree" not in data:
-        return []
+    if not isinstance(data, dict) or "tree" not in data:
+        return None
 
-    paths = [item["path"] for item in data["tree"] if item["type"] == "blob"]
     matched = []
-    for path in paths:
+    for item in data["tree"]:
+        if item.get("type") != "blob":
+            continue
+        path = item.get("path", "")
         for pattern in DEPENDENCY_FILE_PATTERNS:
             if pattern.search(path):
-                matched.append(path)
+                matched.append({
+                    "path": path,
+                    "sha": item.get("sha"),
+                    "size": item.get("size", 0),
+                })
                 break
 
     return matched
 
 
-def get_file_content(owner_repo, file_path):
+def get_file_content(owner_repo, file_path, sha=None):
     """Get decoded file content from a repository.
+
+    The Contents API returns ``encoding: "none"`` with empty content for
+    blobs larger than 1 MB -- the file most likely to carry a real
+    transitive hit (a big lockfile). Fall back to the Git blobs API
+    (up to 100 MB) using the blob *sha* so those are not silently missed
+    (issue #27).
 
     Returns:
         File content as string, or None on failure.
     """
+    def _decode(payload):
+        if payload and payload.get("encoding") == "base64" and payload.get("content"):
+            try:
+                return base64.b64decode(payload["content"]).decode(
+                    "utf-8", errors="replace"
+                )
+            except Exception:
+                return None
+        return None
+
     data = _run_gh([
         "api", f"/repos/{owner_repo}/contents/{file_path}",
     ], ignore_errors=True)
-
-    if not data or "content" not in data:
-        return None
-
-    try:
-        content = base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+    content = _decode(data)
+    if content is not None:
         return content
-    except Exception:
-        return None
+
+    # Large file (Contents API gave encoding "none"): fetch the raw blob.
+    if sha:
+        blob = _run_gh([
+            "api", f"/repos/{owner_repo}/git/blobs/{sha}",
+        ], ignore_errors=True)
+        return _decode(blob)
+
+    return None

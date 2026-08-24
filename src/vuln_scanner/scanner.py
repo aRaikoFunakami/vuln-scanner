@@ -72,24 +72,51 @@ def setup_logging(output_dir, scan_label):
 def scan_github_repo(owner_repo, default_branch, logger):
     """Scan a single GitHub repository for vulnerable dependencies."""
     from vuln_scanner.github_client import get_dependency_files, get_file_content
+    from vuln_scanner.threats.base import MAX_DEP_FILE_BYTES
 
     findings = []
+
+    def not_analyzed(path, reason):
+        # A recognized-but-unanalyzable dependency file (or an
+        # unfetchable file list) must not read as "clean" on the GitHub
+        # path either -- surface it so exit code 3 can fire (issue #27,
+        # the C01/#11 hardening applied to the remote path).
+        findings.append({
+            "repo": owner_repo,
+            "file_path": path,
+            "package": "(unknown)",
+            "version": None,
+            "verdict": NOT_ANALYZED,
+            "note": reason,
+            "source": "github",
+        })
+        logger.warning(f"    {owner_repo}/{path}: {reason} → NOT_ANALYZED")
+
     dep_files = get_dependency_files(owner_repo, default_branch)
+    if dep_files is None:
+        # File list could not be fetched (rate limit / API error / empty
+        # repo): report it, don't silently pass the repo as clean.
+        not_analyzed("(依存ファイル一覧)", "ファイル一覧を取得できませんでした")
+        return findings, 0
     if not dep_files:
         logger.debug(f"  {owner_repo}: 依存ファイルなし")
         return findings, 0
 
-    logger.debug(f"  {owner_repo}: 依存ファイル {len(dep_files)}件 — {dep_files}")
+    logger.debug(f"  {owner_repo}: 依存ファイル {len(dep_files)}件")
 
-    for file_path in dep_files:
+    for item in dep_files:
+        file_path = item["path"]
         parser = get_parser(file_path)
         if not parser:
-            logger.debug(f"    {file_path}: パーサーなし (skip)")
+            not_analyzed(file_path, "未対応の依存ファイル形式")
+            continue
+        if item.get("size", 0) > MAX_DEP_FILE_BYTES:
+            not_analyzed(file_path, "ファイルサイズが上限を超えるため")
             continue
 
-        content = get_file_content(owner_repo, file_path)
-        if not content:
-            logger.debug(f"    {file_path}: 内容取得失敗 (skip)")
+        content = get_file_content(owner_repo, file_path, item.get("sha"))
+        if content is None:
+            not_analyzed(file_path, "内容を取得できませんでした")
             continue
 
         logger.debug(f"    {file_path}: パース中 ({len(content)} bytes)")
@@ -135,6 +162,26 @@ def run_github_scan(args, logger):
         repos = get_org_repos(target_org, repos_filter)
     else:
         repos = get_user_repos(username, repos_filter)
+
+    if repos is None:
+        # Listing failed (rate limit / 403 / bad org). Surface it as a
+        # NOT_ANALYZED finding rather than reporting "0 repos, clean"
+        # (issue #27) -- consistent with the per-repo tree-fetch failure
+        # below, and, unlike sys.exit(), it does not abort a combined
+        # `--local` scan running in the same invocation.
+        logger.error(
+            "リポジトリ一覧の取得に失敗しました（レート制限・権限・存在しない対象など）。"
+        )
+        target = args.user or args.org or username or "(github)"
+        return [{
+            "repo": target,
+            "file_path": "(リポジトリ一覧)",
+            "package": "(unknown)",
+            "version": None,
+            "verdict": NOT_ANALYZED,
+            "note": "リポジトリ一覧を取得できませんでした（レート制限・権限など）",
+            "source": "github",
+        }], 0, []
 
     logger.info(f"対象リポジトリ数: {len(repos)}")
     logger.debug(f"リポジトリ一覧: {[r['full_name'] for r in repos]}")
