@@ -180,14 +180,22 @@ def parse_pnpm_lock(
 ) -> List[Tuple[str, Optional[str]]]:
     """Parse ``pnpm-lock.yaml`` for target npm packages (regex-based).
 
-    Matches patterns like ``/axios@1.14.1:``, ``axios@1.14.1:``, and the
-    scoped form ``/@scope/pkg@1.14.1:``.
+    Matches package keys across lockfile generations:
+
+    - v6 (pnpm 8): ``/axios@1.14.1:``, ``/@scope/pkg@1.14.1:``
+    - v9 (pnpm 9+): ``axios@1.14.1:`` and the quoted scoped form
+      ``'@scope/pkg@1.14.1':`` -- the version must not swallow the
+      closing quote or a ``(peer)`` suffix.
 
     Returns list of ``(package_name, version_or_None)`` tuples.
     """
     results: List[Tuple[str, Optional[str]]] = []
     name_pattern = r"@[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+|[a-zA-Z0-9_-]+"
-    for m in re.finditer(rf"/?({name_pattern})@(\d+\.\d+\.\d+[^:]*?):", content):
+    for m in re.finditer(
+        rf"""^\s*/?['"]?({name_pattern})@(\d+\.\d+\.\d+[^'":\s(]*)[^:\n]*:""",
+        content,
+        re.M,
+    ):
         pkg = m.group(1).lower()
         ver = m.group(2)
         if pkg in target_packages:

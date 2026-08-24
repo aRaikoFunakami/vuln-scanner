@@ -1,0 +1,37 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@arv-bedrock/auth':
+        specifier: 1.1.7
+        version: 1.1.7
+      keyv:
+        specifier: 6.0.0
+        version: 6.0.0
+
+packages:
+
+  '@arv-bedrock/auth@1.1.7':
+    resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
+
+  json-buffer@3.0.1:
+    resolution: {integrity: sha512-4bV5BfR2mqfQTJm+V5tPPdf+ZpuhiIvTuAB5g8kcrXOZpTT/QwwVRWBywX1ozr6lEuPdbHxwaJlm9G6mI2sfSQ==}
+
+  keyv@6.0.0:
+    resolution: {integrity: sha512-oxVHkHR/EJf2CNXnWxRLW6mg7JyCCUcG0DtEGmL2ctUo1PNTin1PUil+r/+4r5MpVgC/fn1kjsx7mjSujKqIpw==}
+
+snapshots:
+
+  '@arv-bedrock/auth@1.1.7': {}
+
+  json-buffer@3.0.1: {}
+
+  keyv@6.0.0:
+    dependencies:
+      json-buffer: 3.0.1

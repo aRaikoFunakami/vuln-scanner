@@ -140,6 +140,26 @@ def main():
         ("keyv", "6.0.0"),
     }
 
+    # pnpm v9 (current default format): scoped keys are quoted, and the
+    # closing quote must not leak into the extracted version (issue #6).
+    # Real `pnpm install --lockfile-only` output (pnpm 11, lockfileVersion
+    # 9.0) with names/versions substituted -- the malicious versions are
+    # unpublished so a lock for them cannot be generated directly.
+    with open(
+        os.path.join(os.path.dirname(__file__), "fixtures", "pnpm-lock.yaml")
+    ) as f:
+        pnpm_v9 = f.read()
+    assert set(parse_pnpm_lock(pnpm_v9, targets)) == {
+        ("@arv-bedrock/auth", "1.1.7"),
+        ("keyv", "6.0.0"),
+    }
+    # Package count survives parsing: a parser that silently reads 0 from a
+    # non-empty lockfile must not look like a clean project.
+    all_seen = set(
+        parse_pnpm_lock(pnpm_v9, {"@arv-bedrock/auth", "keyv", "json-buffer"})
+    )
+    assert len(all_seen) == 3, all_seen
+
     # Regression guard: single direct_package threats still work.
     axios = threats["axios"]
     assert axios.all_packages == {"axios", "plain-crypto-js"}
