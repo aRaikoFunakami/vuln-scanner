@@ -95,7 +95,7 @@ def scan_github_repo(owner_repo, default_branch, logger):
         logger.debug(f"    {file_path}: パース中 ({len(content)} bytes)")
         packages = parser(content)
         for pkg_name, version in packages:
-            verdict, note = judge(pkg_name, version)
+            verdict, note = judge(pkg_name, version, ecosystem=parser.ecosystem)  # type: ignore[attr-defined]
             findings.append({
                 "repo": owner_repo,
                 "file_path": file_path,

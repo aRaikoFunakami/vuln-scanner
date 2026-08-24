@@ -4,5 +4,5 @@ requires-python = ">=3.9"
 
 [[package]]
 name = "vuln-scanner"
-version = "1.1.1"
+version = "1.1.2"
 source = { editable = "." }

@@ -133,7 +133,7 @@ def scan_local(root_dir, logger=None):
 
         packages = parser(content)
         for pkg_name, version in packages:
-            verdict, note = judge(pkg_name, version)
+            verdict, note = judge(pkg_name, version, ecosystem=parser.ecosystem)  # type: ignore[attr-defined]
             findings.append({
                 "repo": root_dir,
                 "file_path": rel_path,
@@ -160,9 +160,9 @@ def scan_local(root_dir, logger=None):
                     ver_or_vers if isinstance(ver_or_vers, list) else [ver_or_vers]
                 )
                 for ver in versions:
-                    verdict, note = judge(pkg, ver)
                     env_label = env_entry["environment"]
                     ecosystem = env_entry.get("ecosystem", "")
+                    verdict, note = judge(pkg, ver, ecosystem=ecosystem or None)
                     if ecosystem == "npm":
                         note = f"npm インストール済み (dir: {env_label.removeprefix('npm:')})"
                         file_path_label = f"(npm installed: {env_label.removeprefix('npm:')})"

@@ -80,16 +80,26 @@ def get_parser(file_path: str) -> Optional[Callable]:
 
     If multiple threats can parse the same file, a composite parser that
     merges results from all matching parsers is returned.
+
+    The returned callable carries a ``.ecosystem`` attribute (the ecosystem
+    string, or ``None`` if -- hypothetically -- matching threats span more
+    than one ecosystem) so callers can pass it through to :func:`judge`
+    (issue #16). File-pattern globs never overlap across ecosystems today,
+    so in practice this is always a single ecosystem.
     """
     basename = file_path.rsplit("/", 1)[-1] if "/" in file_path else file_path
     parsers = []
+    ecosystems: set = set()
     for t in _THREATS:
         p = t.match_file(basename)
         if p is not None:
             parsers.append(p)
+            ecosystems.add(t.ecosystem)
     if not parsers:
         return None
+    ecosystem = next(iter(ecosystems)) if len(ecosystems) == 1 else None
     if len(parsers) == 1:
+        parsers[0].ecosystem = ecosystem  # type: ignore[attr-defined]
         return parsers[0]
 
     # Composite parser – merge results, deduplicate
@@ -103,6 +113,7 @@ def get_parser(file_path: str) -> Optional[Callable]:
                     results.append(item)
         return results
 
+    _composite.ecosystem = ecosystem  # type: ignore[attr-defined]
     return _composite
 
 

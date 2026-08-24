@@ -297,6 +297,39 @@ def test_not_analyzed_never_looks_clean():
     )
 
 
+def test_scan_local_passes_ecosystem_to_judge():
+    """Regression guard (#16): scan_local's dependency-file judge() calls
+    must pass the ecosystem of the file being parsed. Before the fix,
+    judge(pkg, ver) was called with no ecosystem filter, so an npm/PyPI
+    name collision could cross-contaminate verdicts."""
+    import json
+    import tempfile
+
+    import vuln_scanner.local_scanner as local_scanner_mod
+
+    real_judge = local_scanner_mod.judge
+    calls = []
+
+    def spy(pkg, ver, ecosystem=None):
+        calls.append((pkg, ecosystem))
+        return real_judge(pkg, ver, ecosystem=ecosystem)
+
+    with tempfile.TemporaryDirectory() as root:
+        with open(os.path.join(root, "package.json"), "w") as f:
+            json.dump({"dependencies": {"axios": "1.14.1"}}, f)
+        with open(os.path.join(root, "requirements.txt"), "w") as f:
+            f.write("litellm==1.82.7\n")
+        local_scanner_mod.judge = spy
+        try:
+            local_scanner_mod.scan_local(root, None)
+        finally:
+            local_scanner_mod.judge = real_judge
+
+    eco_by_pkg = dict(calls)
+    assert eco_by_pkg.get("axios") == "npm", calls
+    assert eco_by_pkg.get("litellm") == "python", calls
+
+
 def test_judge_worst_verdict_wins():
     """judge() must consult ALL owning threats (worst verdict wins) and
     honor the ecosystem filter -- npm and PyPI names collide."""
@@ -418,6 +451,7 @@ def main():
     test_disk_scan_no_false_positive_from_subtree()
     test_enrich_findings_handles_multi_version_installed()
     test_not_analyzed_never_looks_clean()
+    test_scan_local_passes_ecosystem_to_judge()
     test_judge_worst_verdict_wins()
 
     print("OK")
