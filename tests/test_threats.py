@@ -23,13 +23,15 @@ from vuln_scanner.threats.ecosystems.npm import (  # noqa: E402
 )
 
 
+def _fixture(name):
+    return os.path.join(os.path.dirname(__file__), "fixtures", name)
+
+
 # Real `npm install --package-lock-only` output (npm 11, lockfileVersion 3).
 # The malicious keyv@6.0.0 is unpublished from the registry, so the lock was
 # generated with benign versions and only the version strings / the dummy
 # package name were substituted afterwards (CLAUDE.md レビュー観点1).
-FIXTURE_LOCK = os.path.join(
-    os.path.dirname(__file__), "fixtures", "package-lock.json"
-)
+FIXTURE_LOCK = _fixture("package-lock.json")
 
 
 def _make_finding(root, package):
@@ -94,6 +96,34 @@ def test_enrich_does_not_flip_verdicts():
     assert selftest_f["verdict"] == VULNERABLE, selftest_f
 
 
+def test_enrich_most_severe_lock_version():
+    """A lockfile pinning both a safe and a vulnerable version of the same
+    package (direct + transitive) must enrich to the vulnerable one, not
+    to whichever version appears first in the file."""
+    import json
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as root:
+        lock_path = os.path.join(root, "package-lock.json")
+        with open(FIXTURE_LOCK) as f:
+            lock = json.load(f)
+        # Inject a nested (transitive) SAFE keyv using the entry shape npm
+        # emits; sorted keys put it before the vulnerable one, which the
+        # old first-wins pick would have reported.
+        lock["packages"]["node_modules/a-pkg/node_modules/keyv"] = dict(
+            lock["packages"]["node_modules/keyv"], version="5.0.0"
+        )
+        lock["packages"] = dict(sorted(lock["packages"].items()))
+        with open(lock_path, "w") as f:
+            json.dump(lock, f)
+        findings = [_make_finding(root, "keyv")]
+        for threat in get_all_threats():
+            threat.enrich_findings(findings, [], [lock_path], root)
+
+    assert findings[0]["version"] == "6.0.0", findings[0]
+    assert findings[0]["verdict"] == VULNERABLE, findings[0]
+
+
 def test_judge_worst_verdict_wins():
     """judge() must consult ALL owning threats (worst verdict wins) and
     honor the ecosystem filter -- npm and PyPI names collide."""
@@ -134,11 +164,44 @@ def main():
         ("@arv-bedrock/auth", "1.1.7"),
         ("keyv", "6.0.0"),
     }
-    pnpm_content = "/@arv-bedrock/auth@1.1.7:\n" "/keyv@6.0.0:\n"
-    assert set(parse_pnpm_lock(pnpm_content, targets)) == {
+    # All three pnpm lockfile generations, from real `pnpm install
+    # --lockfile-only` output (pnpm 7 / 8 / 11) with names/versions
+    # substituted -- the malicious versions are unpublished so a lock for
+    # them cannot be generated directly (issue #6).
+    # List (not set) equality: each package must be reported exactly once
+    # (v9 repeats every package under `snapshots:`), scoped quoting must
+    # not leak into versions, and `(peer)` / `_peer` suffixes must be
+    # stripped.
+    pnpm_targets = {
+        "@arv-bedrock/auth", "keyv", "react", "use-sync-external-store",
+    }
+    pnpm_expected = [
         ("@arv-bedrock/auth", "1.1.7"),
         ("keyv", "6.0.0"),
-    }
+        ("react", "18.3.1"),
+        ("use-sync-external-store", "1.2.2"),
+    ]
+    for gen in ("v5", "v6", "v9"):
+        with open(_fixture(f"pnpm-lock-{gen}.yaml")) as f:
+            parsed = parse_pnpm_lock(f.read(), pnpm_targets)
+        assert parsed == pnpm_expected, (gen, parsed)
+
+    # Negative space: keys outside the `packages:` section must not be
+    # reported -- `overrides:` names a version that is not necessarily
+    # installed, `snapshots:` would double-count.  (Synthetic snippet:
+    # a does-not-detect probe, not lockfile fixture data.)
+    not_installed = (
+        "overrides:\n"
+        "  keyv@6.0.0: ^7.0.0\n"
+        "snapshots:\n"
+        "  keyv@6.0.0:\n"
+    )
+    assert parse_pnpm_lock(not_installed, {"keyv"}) == []
+
+    # Dotted package names (threats.json lists e.g. hamus.js) must parse
+    assert parse_pnpm_lock(
+        "packages:\n  hamus.js@1.0.4:\n", {"hamus.js"}
+    ) == [("hamus.js", "1.0.4")]
 
     # Regression guard: single direct_package threats still work.
     axios = threats["axios"]
@@ -147,6 +210,7 @@ def main():
     assert judge("plain-crypto-js", None)[0] == "VULNERABLE"
 
     test_enrich_does_not_flip_verdicts()
+    test_enrich_most_severe_lock_version()
     test_judge_worst_verdict_wins()
 
     print("OK")

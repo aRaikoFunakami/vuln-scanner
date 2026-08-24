@@ -14,6 +14,8 @@ import shutil
 import subprocess
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from vuln_scanner.threats.base import most_severe
+
 # ── File-matching patterns ───────────────────────────────────────────────────
 
 FILE_PATTERNS_GLOB: List[str] = [
@@ -178,19 +180,48 @@ def parse_pnpm_lock(
     content: str,
     target_packages: Set[str],
 ) -> List[Tuple[str, Optional[str]]]:
-    """Parse ``pnpm-lock.yaml`` for target npm packages (regex-based).
+    """Parse ``pnpm-lock.yaml`` for target npm packages.
 
-    Matches patterns like ``/axios@1.14.1:``, ``axios@1.14.1:``, and the
-    scoped form ``/@scope/pkg@1.14.1:``.
+    Reads package keys from the top-level ``packages:`` section only:
+    ``snapshots:`` (v9) repeats every package, and ``overrides:`` /
+    ``patchedDependencies:`` name versions that are not necessarily
+    installed.
 
-    Returns list of ``(package_name, version_or_None)`` tuples.
+    Handles the key shapes of all lockfile generations:
+
+    - v5 (pnpm 6/7): ``/name/1.0.0:``, peer suffix ``_react@18.3.1``
+    - v6 (pnpm 8): ``/name@1.0.0:``, peer suffix ``(react@18.3.1)``
+    - v9 (pnpm 9+): ``name@1.0.0:``, quoted scoped ``'@scope/pkg@1.0.0':``
+
+    Returns deduplicated list of ``(package_name, version_or_None)``.
     """
+    # ponytail: aliased keys (`name@npm:real-pkg@1.0.0`) are skipped -- the
+    # resolved target is not derivable from the key alone; parse the
+    # `resolution:` field if alias coverage is ever needed.
+    name_pattern = r"@[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+|[a-zA-Z0-9_.-]+"
+    key_re = re.compile(rf"({name_pattern})[@/](\d+\.\d+\.\d+[0-9A-Za-z.+-]*)")
     results: List[Tuple[str, Optional[str]]] = []
-    name_pattern = r"@[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+|[a-zA-Z0-9_-]+"
-    for m in re.finditer(rf"/?({name_pattern})@(\d+\.\d+\.\d+[^:]*?):", content):
+    seen: set = set()
+    section: Optional[str] = None
+    for line in content.splitlines():
+        if line and line[0] not in " \t":
+            section = line.split(":", 1)[0].strip().strip("'\"")
+            continue
+        if section != "packages":
+            continue
+        stripped = line.strip()
+        if ":" not in stripped:
+            continue
+        # "  '/@scope/pkg@1.0.0(react@18.3.1)':" -> "@scope/pkg@1.0.0"
+        key = stripped.split(":", 1)[0].strip("'\"").lstrip("/").split("(", 1)[0]
+        m = key_re.match(key)
+        # The version must end the key, except for a v5-style "_peer" suffix
+        if not m or (m.end() != len(key) and key[m.end()] != "_"):
+            continue
         pkg = m.group(1).lower()
         ver = m.group(2)
-        if pkg in target_packages:
+        if pkg in target_packages and (pkg, ver) not in seen:
+            seen.add((pkg, ver))
             results.append((pkg, ver))
     return results
 
@@ -442,8 +473,11 @@ def enrich_findings(
         if pkg_name:
             all_targets.add(pkg_name)
 
-    # Build lockfile_versions: {directory: {pkg: (version, lockfile_relpath)}}
-    lockfile_versions: Dict[str, Dict[str, Tuple[str, str]]] = {}
+    # Build lockfile_versions:
+    # {directory: {pkg: [(version, lockfile_relpath), ...]}}
+    # A lockfile can legitimately pin several versions of one package
+    # (direct + transitive), so every version is kept for judgment.
+    lockfile_versions: Dict[str, Dict[str, List[Tuple[str, str]]]] = {}
     for f in dep_files:
         basename = os.path.basename(f)
         if basename not in ("package-lock.json", "yarn.lock", "pnpm-lock.yaml"):
@@ -471,11 +505,11 @@ def enrich_findings(
         if lock_dir not in lockfile_versions:
             lockfile_versions[lock_dir] = {}
         for pkg_name, ver in parsed:
-            if ver and pkg_name not in lockfile_versions[lock_dir]:
-                lockfile_versions[lock_dir][pkg_name] = (
-                    ver,
-                    os.path.relpath(f, root_dir),
-                )
+            if ver:
+                entry = (ver, os.path.relpath(f, root_dir))
+                versions = lockfile_versions[lock_dir].setdefault(pkg_name, [])
+                if entry not in versions:
+                    versions.append(entry)
 
     for finding in findings:
         if finding["source"] != "dependency_file":
@@ -492,9 +526,18 @@ def enrich_findings(
         finding_dir = os.path.dirname(finding_abs)
         dir_locks = lockfile_versions.get(finding_dir, {})
         if pkg in dir_locks:
-            lock_ver, lock_file = dir_locks[pkg]
+            # Judge every pinned version and keep the most severe: a
+            # vulnerable copy must never be masked by a safe sibling
+            # version that happens to appear first in the lockfile.
+            best = None
+            for lock_ver, lock_file in dir_locks[pkg]:
+                result = judge_fn(pkg, lock_ver)
+                if best is None or most_severe(best[0], result) is result:
+                    best = (result, lock_ver, lock_file)
+            if best is None:
+                continue
+            (verdict, judge_note), lock_ver, lock_file = best
             finding["version"] = lock_ver
-            verdict, judge_note = judge_fn(pkg, lock_ver)
             finding["verdict"] = verdict
             finding["note"] = (
                 f"{judge_note}（lockfile {lock_file} による実バージョン: {lock_ver}）"
