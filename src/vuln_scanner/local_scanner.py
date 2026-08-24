@@ -165,8 +165,15 @@ def scan_local(root_dir, logger=None):
                 "source": "malware_artifact",
             })
 
-    # 5. Enrich findings (e.g. fill in missing versions from lockfiles/installed)
+    # 5. Enrich findings (e.g. fill in missing versions from lockfiles/installed).
+    # Once per ecosystem: enrichment has no per-threat state and judges
+    # cross-threat, so running it per threat repeats identical work
+    # (lockfile I/O and log lines scale with threats.json entries).
+    enriched_ecosystems = set()
     for threat in threats:
+        if threat.ecosystem in enriched_ecosystems:
+            continue
+        enriched_ecosystems.add(threat.ecosystem)
         threat.enrich_findings(findings, installed_info, dep_files, root_dir, logger)
 
     return findings, len(dep_files), installed_info

@@ -17,6 +17,7 @@ from vuln_scanner.threats.base import (
     VULNERABLE,
     WARNING,
     ThreatDefinition,
+    most_severe,
 )
 
 
@@ -189,11 +190,25 @@ class DataDrivenThreat(ThreatDefinition):
         root_dir: str,
         logger: Any = None,
     ) -> None:
-        if hasattr(self._eco, "enrich_findings"):
-            self._eco.enrich_findings(
-                findings, installed_info, dep_files, root_dir,
-                self.judge, logger,
+        if not hasattr(self._eco, "enrich_findings"):
+            return
+        # Judge across ALL registered threats of this ecosystem, not just
+        # this one: a single threat's judge returns SAFE for out-of-scope
+        # packages and would overwrite other threats' verdicts (issue #5).
+        # self.judge is merged in so a threat that was never register()ed
+        # (tests, programmatic use) still judges its own packages.
+        # Deferred import: threats/__init__ imports this module.
+        from vuln_scanner.threats import judge as registry_judge
+
+        def judge_fn(pkg: str, ver: Optional[str]) -> Tuple[str, str]:
+            return most_severe(
+                registry_judge(pkg, ver, ecosystem=self.ecosystem),
+                self.judge(pkg, ver),
             )
+
+        self._eco.enrich_findings(
+            findings, installed_info, dep_files, root_dir, judge_fn, logger,
+        )
 
     # ── Report text ──────────────────────────────────────────────────────
 
