@@ -597,6 +597,8 @@ def test_threats_json_schema_validation():
         {"name": "z", "ecosystem": "npm"},                          # no direct_packages
         {"name": "w", "ecosystem": "npm", "direct_packages": {}},   # empty direct_packages
         {"name": "v", "ecosystem": "npm", "direct_packages": {"x": "1.0"}},  # versions not list
+        {"name": "u", "ecosystem": "npm", "direct_packages": {"x": [1.0]}},  # non-string version
+        {"name": "t", "ecosystem": "npm", "direct_packages": {"x": [None]}},  # null version
         "not-a-dict",
     ]
     for i, entry in enumerate(bad_entries):

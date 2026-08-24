@@ -186,6 +186,15 @@ def _validate_entry(entry, index: int) -> None:
                 f"{where}: direct_packages[{pkg!r}] must be a list of "
                 f"version strings, got {type(versions).__name__}"
             )
+        # Elements must be strings: a bare JSON number (1.14 instead of
+        # "1.14") or null would otherwise pass here and crash
+        # canonical_version() with an un-named AttributeError at import.
+        for v in versions:
+            if not isinstance(v, str):
+                raise ValueError(
+                    f"{where}: direct_packages[{pkg!r}] contains a non-string "
+                    f"version {v!r} ({type(v).__name__}); quote it in threats.json"
+                )
 
 
 _DB_PATH = os.path.join(os.path.dirname(__file__), "threats.json")
