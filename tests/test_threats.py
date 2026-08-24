@@ -175,6 +175,27 @@ def test_semver_ranges_never_assert_safe():
     assert judge("@crawlee/core", "3.17.1-beta.80")[0] == VULNERABLE
 
 
+def test_disk_scan_three_layouts():
+    """CLAUDE.md レビュー観点2 (#10): disk scanning must find installed
+    packages in all three node_modules layouts -- npm hoist, pnpm store
+    (.pnpm/), and nested (non-hoisted) node_modules."""
+    from vuln_scanner.local_scanner import scan_local
+
+    cases = [
+        ("disk-npm-hoist", "keyv", "6.0.0"),
+        ("disk-pnpm-store", "keyv", "6.0.0"),
+        ("disk-nested", "plain-crypto-js", "1.0.0"),
+    ]
+    for fixture_name, pkg, ver in cases:
+        findings, _files, _installed = scan_local(_fixture(fixture_name), None)
+        hits = [
+            f for f in findings
+            if f["package"] == pkg and f["verdict"] == VULNERABLE
+        ]
+        assert hits, (fixture_name, pkg, findings)
+        assert any(f["version"] == ver for f in hits), (fixture_name, findings)
+
+
 def test_judge_worst_verdict_wins():
     """judge() must consult ALL owning threats (worst verdict wins) and
     honor the ecosystem filter -- npm and PyPI names collide."""
@@ -292,6 +313,7 @@ def main():
     test_enrich_does_not_flip_verdicts()
     test_enrich_most_severe_lock_version()
     test_semver_ranges_never_assert_safe()
+    test_disk_scan_three_layouts()
     test_judge_worst_verdict_wins()
 
     print("OK")

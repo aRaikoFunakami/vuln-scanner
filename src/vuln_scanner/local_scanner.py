@@ -108,33 +108,40 @@ def scan_local(root_dir, logger=None):
         threat_installed = threat.check_installed(root_dir, dep_files, logger)
         for env_entry in threat_installed:
             installed_info.append(env_entry)
-            for pkg, ver in env_entry["packages"].items():
-                verdict, note = judge(pkg, ver)
-                env_label = env_entry["environment"]
-                ecosystem = env_entry.get("ecosystem", "")
-                if ecosystem == "npm":
-                    note = f"npm インストール済み (dir: {env_label.removeprefix('npm:')})"
-                    file_path_label = f"(npm installed: {env_label.removeprefix('npm:')})"
-                    source = "npm_list"
-                else:
-                    if env_label == "system":
-                        note = f"インストール済み (system python: {env_entry['python']})"
-                        file_path_label = "(installed)"
+            for pkg, ver_or_vers in env_entry["packages"].items():
+                # npm can have several on-disk copies of one package
+                # (hoisted + pnpm-store/nested, issue #10); python has
+                # exactly one per venv entry
+                versions = (
+                    ver_or_vers if isinstance(ver_or_vers, list) else [ver_or_vers]
+                )
+                for ver in versions:
+                    verdict, note = judge(pkg, ver)
+                    env_label = env_entry["environment"]
+                    ecosystem = env_entry.get("ecosystem", "")
+                    if ecosystem == "npm":
+                        note = f"npm インストール済み (dir: {env_label.removeprefix('npm:')})"
+                        file_path_label = f"(npm installed: {env_label.removeprefix('npm:')})"
+                        source = "npm_list"
                     else:
-                        note = f"インストール済み (venv: {env_label})"
-                        file_path_label = f"(installed: {env_label})"
-                    source = "pip_freeze"
-                findings.append({
-                    "repo": root_dir,
-                    "file_path": file_path_label,
-                    "package": pkg,
-                    "version": ver,
-                    "verdict": verdict,
-                    "note": note,
-                    "source": source,
-                })
-                if logger:
-                    logger.info(f"    インストール済み: {pkg}=={ver} → {verdict}")
+                        if env_label == "system":
+                            note = f"インストール済み (system python: {env_entry['python']})"
+                            file_path_label = "(installed)"
+                        else:
+                            note = f"インストール済み (venv: {env_label})"
+                            file_path_label = f"(installed: {env_label})"
+                        source = "pip_freeze"
+                    findings.append({
+                        "repo": root_dir,
+                        "file_path": file_path_label,
+                        "package": pkg,
+                        "version": ver,
+                        "verdict": verdict,
+                        "note": note,
+                        "source": source,
+                    })
+                    if logger:
+                        logger.info(f"    インストール済み: {pkg}=={ver} → {verdict}")
 
     # 3. Check for malicious directories (e.g. node_modules/plain-crypto-js)
     for threat in threats:
