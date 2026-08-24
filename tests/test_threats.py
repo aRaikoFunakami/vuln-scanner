@@ -20,6 +20,7 @@ from vuln_scanner.threats import (  # noqa: E402
 from vuln_scanner.threats.ecosystems.npm import (  # noqa: E402
     parse_package_lock_json,
     parse_pnpm_lock,
+    parse_yarn_lock,
 )
 
 
@@ -172,10 +173,10 @@ def main():
     # (v9 repeats every package under `snapshots:`), scoped quoting must
     # not leak into versions, and `(peer)` / `_peer` suffixes must be
     # stripped.
-    pnpm_targets = {
+    lock_targets = {
         "@arv-bedrock/auth", "keyv", "react", "use-sync-external-store",
     }
-    pnpm_expected = [
+    lock_expected = [
         ("@arv-bedrock/auth", "1.1.7"),
         ("keyv", "6.0.0"),
         ("react", "18.3.1"),
@@ -183,8 +184,17 @@ def main():
     ]
     for gen in ("v5", "v6", "v9"):
         with open(_fixture(f"pnpm-lock-{gen}.yaml")) as f:
-            parsed = parse_pnpm_lock(f.read(), pnpm_targets)
-        assert parsed == pnpm_expected, (gen, parsed)
+            parsed = parse_pnpm_lock(f.read(), lock_targets)
+        assert parsed == lock_expected, (gen, parsed)
+
+    # yarn classic (v1) and berry (v2+), from real `yarn install` output
+    # (yarn 1.22 / yarn 4.6) with names/versions substituted (issue #8).
+    # Berry writes `version: 1.1.7` (colon-separated, unquoted), which the
+    # parser previously could not read at all -- not even as WARNING.
+    for gen in ("classic", "berry"):
+        with open(_fixture(f"yarn-{gen}.lock")) as f:
+            parsed = parse_yarn_lock(f.read(), lock_targets)
+        assert sorted(parsed) == lock_expected, (gen, parsed)
 
     # Negative space: keys outside the `packages:` section must not be
     # reported -- `overrides:` names a version that is not necessarily

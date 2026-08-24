@@ -142,8 +142,10 @@ def parse_yarn_lock(
 ) -> List[Tuple[str, Optional[str]]]:
     """Parse ``yarn.lock`` for target npm packages.
 
-    Recognises header lines such as ``axios@^1.14.0:`` and the subsequent
-    ``version "X.Y.Z"`` line.
+    Recognises header lines such as ``axios@^1.14.0:`` (classic) and
+    ``"axios@npm:1.14.1":`` (berry v2+), and the subsequent version line
+    in either format: ``version "1.14.1"`` (classic) or
+    ``version: 1.14.1`` (berry).
 
     Returns list of ``(package_name, version_or_None)`` tuples.
     """
@@ -169,7 +171,7 @@ def parse_yarn_lock(
                     break
             current_pkg = pkg_name
         elif current_pkg and line.strip().startswith("version"):
-            m = re.match(r'\s+version\s+"?([^"]+)"?', line)
+            m = re.match(r'\s+version:?\s+"?([^"\s]+)"?', line)
             if m:
                 results.append((current_pkg, m.group(1)))
             current_pkg = None
