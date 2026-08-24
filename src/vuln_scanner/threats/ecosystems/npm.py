@@ -286,33 +286,72 @@ def _walk_installed_versions(
     reported rather than collapsed to one.
     """
     found: Dict[str, List[str]] = {}
-    node_modules_root = os.path.join(root_dir, "node_modules")
-    if not os.path.isdir(node_modules_root):
-        return found
 
-    for dirpath, dirnames, _filenames in os.walk(node_modules_root):
-        dirnames[:] = [d for d in dirnames if d not in _WALK_SKIP_DIRS]
-        basename = os.path.basename(dirpath)
-        if basename.startswith("@") or basename == "node_modules":
-            continue  # scope directory or a node_modules dir itself
-        parent = os.path.basename(os.path.dirname(dirpath))
-        pkg_name = f"{parent}/{basename}" if parent.startswith("@") else basename
+    def record(pkg_name: str, pkg_dir: str) -> None:
         pkg_name = pkg_name.lower()
         if pkg_name not in target_packages:
-            continue
-        pkg_json_path = os.path.join(dirpath, "package.json")
+            return
         try:
-            with open(pkg_json_path, "r", encoding="utf-8") as f:
+            with open(
+                os.path.join(pkg_dir, "package.json"), "r", encoding="utf-8"
+            ) as f:
                 ver = json.load(f).get("version")
         except (OSError, ValueError):
-            continue
+            return
         if not ver:
-            continue
+            return
         versions = found.setdefault(pkg_name, [])
         if ver not in versions:
             versions.append(ver)
             if logger:
-                logger.debug(f"    node_modules 走査: {pkg_name}=={ver} ({dirpath})")
+                logger.debug(f"    node_modules 走査: {pkg_name}=={ver} ({pkg_dir})")
+
+    def scan(node_modules_dir: str) -> None:
+        # Only inspect DIRECT children of a real node_modules directory --
+        # matching by basename anywhere in a package's own subtree (e.g.
+        # a decoy test/{pkgname}/package.json) produced false positives.
+        try:
+            entries = os.listdir(node_modules_dir)
+        except OSError:
+            return
+        for entry in entries:
+            if entry in _WALK_SKIP_DIRS:
+                continue
+            entry_path = os.path.join(node_modules_dir, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            if entry == ".pnpm":
+                # pnpm's content store: node_modules/.pnpm/{name}@{ver}/
+                # node_modules/{name} -- a real directory, not a symlink
+                try:
+                    store_entries = os.listdir(entry_path)
+                except OSError:
+                    store_entries = []
+                for store_entry in store_entries:
+                    store_nm = os.path.join(entry_path, store_entry, "node_modules")
+                    if os.path.isdir(store_nm):
+                        scan(store_nm)
+                continue
+            if entry.startswith("@"):
+                try:
+                    scoped_entries = os.listdir(entry_path)
+                except OSError:
+                    scoped_entries = []
+                for scoped in scoped_entries:
+                    scoped_path = os.path.join(entry_path, scoped)
+                    if not os.path.isdir(scoped_path):
+                        continue
+                    record(f"{entry}/{scoped}", scoped_path)
+                    nested = os.path.join(scoped_path, "node_modules")
+                    if os.path.isdir(nested):
+                        scan(nested)
+                continue
+            record(entry, entry_path)
+            nested = os.path.join(entry_path, "node_modules")
+            if os.path.isdir(nested):
+                scan(nested)  # non-hoisted nested dependency
+
+    scan(os.path.join(root_dir, "node_modules"))
     return found
 
 
@@ -593,23 +632,32 @@ def enrich_findings(
                 )
             continue
 
-        # 2. Fallback: npm installed version from node_modules
+        # 2. Fallback: npm installed version(s) from node_modules -- a
+        # package can have several on-disk copies (hoisted + pnpm-store/
+        # nested, issue #10), so judge every one and keep the worst.
         npm_env_key = f"npm:{os.path.relpath(finding_dir, root_dir)}"
         for env in installed_info:
             if env["environment"] == npm_env_key:
                 npm_pkgs = env["packages"]
                 if pkg in npm_pkgs:
-                    actual_ver = npm_pkgs[pkg]
-                    finding["version"] = actual_ver
-                    verdict, judge_note = judge_fn(pkg, actual_ver)
-                    finding["verdict"] = verdict
-                    finding["note"] = (
-                        f"{judge_note}"
-                        f"（node_modules の実バージョン: {actual_ver}, {npm_env_key}）"
-                    )
-                    if logger:
-                        logger.info(
-                            f"    npm バージョン補完: {pkg} → {actual_ver}"
-                            f" ({npm_env_key}) → {verdict}"
+                    raw = npm_pkgs[pkg]
+                    versions = raw if isinstance(raw, list) else [raw]
+                    best = None
+                    for actual_ver in versions:
+                        result = judge_fn(pkg, actual_ver)
+                        if best is None or most_severe(best[0], result) is result:
+                            best = (result, actual_ver)
+                    if best is not None:
+                        (verdict, judge_note), actual_ver = best
+                        finding["version"] = actual_ver
+                        finding["verdict"] = verdict
+                        finding["note"] = (
+                            f"{judge_note}"
+                            f"（node_modules の実バージョン: {actual_ver}, {npm_env_key}）"
                         )
+                        if logger:
+                            logger.info(
+                                f"    npm バージョン補完: {pkg} → {actual_ver}"
+                                f" ({npm_env_key}) → {verdict}"
+                            )
                 break
