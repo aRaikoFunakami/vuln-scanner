@@ -4,7 +4,7 @@ CLAUDE.md レビュー観点5: E2E scans over real fixture projects for both
 ecosystems, and exit codes usable as a CI gate (VULNERABLE -> non-zero).
 
 Exit codes: 0 = clean, 1 = VULNERABLE, 2 = operational error,
-3 = reserved for "not analyzable" (issue #11).
+3 = a dependency file could not be analyzed (issue #11).
 """
 
 import os
@@ -50,6 +50,10 @@ CASES = [
     ("e2e-npm-nodemod-only", 1, "keyv"),
     ("e2e-python", 1, "litellm"),
     ("e2e-clean", 0, "スキャン対象ファイル数: 2"),
+    # corrupted package.json: no VULNERABLE finding possible, so exit 3
+    # ("not analyzed") must fire -- not the exit 0 "clean" a silently
+    # empty parse result would otherwise produce (issue #11)
+    ("disk-corrupted-json", 3, "NOT_ANALYZED"),
 ]
 
 

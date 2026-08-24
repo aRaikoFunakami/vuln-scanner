@@ -17,6 +17,12 @@ VULNERABLE = "VULNERABLE"
 SAFE = "SAFE"
 WARNING = "WARNING"
 CHECK_INDIRECT = "CHECK_INDIRECT"
+# A recognized dependency file that could not be analyzed: no parser
+# understands its format (e.g. a future lockfile generation), or it
+# failed to parse as its expected format (e.g. corrupted JSON). Distinct
+# from SAFE/a clean scan -- "not analyzed" must never look like "clean"
+# (CLAUDE.md レビュー観点2, issue #11).
+NOT_ANALYZED = "NOT_ANALYZED"
 
 # Severity order for combining verdicts from multiple threats: a package
 # listed by two threats must get the worst applicable verdict, never be

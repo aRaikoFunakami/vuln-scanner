@@ -14,6 +14,8 @@ import subprocess
 import sys
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from vuln_scanner.threats.base import NOT_ANALYZED
+
 # ── File-matching patterns ───────────────────────────────────────────────────
 
 FILE_PATTERNS_GLOB: List[str] = [
@@ -492,6 +494,8 @@ def enrich_findings(
     for finding in findings:
         if finding["source"] != "dependency_file":
             continue
+        if finding["verdict"] == NOT_ANALYZED:
+            continue  # the dependency file itself failed to parse
         # Only enrich Python files (skip package.json etc.)
         file_basename = os.path.basename(finding["file_path"])
         if file_basename == "package.json":

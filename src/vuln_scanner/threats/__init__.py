@@ -15,6 +15,7 @@ from vuln_scanner.threats.base import (  # noqa: F401 – re-export
     SAFE,
     WARNING,
     CHECK_INDIRECT,
+    NOT_ANALYZED,
     ThreatDefinition,
     most_severe,
 )
