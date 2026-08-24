@@ -70,6 +70,17 @@ vuln-scanner --org myorg --local ~/projects
 vuln-scanner --local ~/GitHub --output-dir ./my_results
 ```
 
+## 終了コード
+
+CI ゲートとして利用できます。
+
+| コード | 意味 |
+|-------|------|
+| `0` | クリーン（VULNERABLE 検出なし） |
+| `1` | VULNERABLE を検出 |
+| `2` | 実行エラー（引数不正、gh 未認証など） |
+| `3` | 予約（解析不可の依存ファイルあり — 今後実装） |
+
 ## 出力ファイル
 
 | ファイル | 内容 |

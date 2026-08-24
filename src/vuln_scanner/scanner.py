@@ -306,12 +306,11 @@ def main():
     logger.info(f"  結果 (JSON):         {json_path}")
     logger.info(f"  調査ログ:            {log_path}")
 
-    # CI gate: non-zero exit when vulnerable findings exist.
-    # (exit code 2 is reserved for "dependency files found but not
-    # analyzable" -- issue #11)
-    if any(f.get("verdict") == VULNERABLE for f in all_findings):
-        return 1
-    return 0
+    # CI gate.  Exit codes: 0 = clean, 1 = VULNERABLE findings,
+    # 2 = operational error (argparse usage errors and gh auth failures
+    # already use 2), 3 = reserved for "dependency files found but not
+    # analyzable" (issue #11).
+    return 1 if any(f["verdict"] == VULNERABLE for f in all_findings) else 0
 
 
 if __name__ == "__main__":
