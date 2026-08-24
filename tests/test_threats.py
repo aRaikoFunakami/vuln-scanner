@@ -330,6 +330,43 @@ def test_scan_local_passes_ecosystem_to_judge():
     assert eco_by_pkg.get("litellm") == "python", calls
 
 
+def test_reporter_passes_ecosystem_to_judge():
+    """Regression guard (#16 follow-up): generate_markdown's installed-
+    packages judge() call must pass ecosystem too -- code review on PR #22
+    found this call site was missed by the initial fix."""
+    import tempfile
+
+    import vuln_scanner.reporter as reporter_mod
+
+    real_judge = reporter_mod.judge
+    calls = []
+
+    def spy(pkg, ver, ecosystem=None):
+        calls.append((pkg, ecosystem))
+        return real_judge(pkg, ver, ecosystem=ecosystem)
+
+    installed_info = [
+        {"environment": "npm:proj", "ecosystem": "npm",
+         "packages": {"axios": "1.14.1"}},
+        {"environment": "venv", "ecosystem": "python", "python": "3.11",
+         "packages": {"litellm": "1.82.7"}},
+    ]
+    reporter_mod.judge = spy
+    try:
+        with tempfile.TemporaryDirectory() as out:
+            md_path = os.path.join(out, "r.md")
+            reporter_mod.generate_markdown(
+                [], 1, 1, [{"full_name": "/x", "archived": False}],
+                md_path, installed_info=installed_info,
+            )
+    finally:
+        reporter_mod.judge = real_judge
+
+    eco_by_pkg = dict(calls)
+    assert eco_by_pkg.get("axios") == "npm", calls
+    assert eco_by_pkg.get("litellm") == "python", calls
+
+
 def test_judge_worst_verdict_wins():
     """judge() must consult ALL owning threats (worst verdict wins) and
     honor the ecosystem filter -- npm and PyPI names collide."""
@@ -452,6 +489,7 @@ def main():
     test_enrich_findings_handles_multi_version_installed()
     test_not_analyzed_never_looks_clean()
     test_scan_local_passes_ecosystem_to_judge()
+    test_reporter_passes_ecosystem_to_judge()
     test_judge_worst_verdict_wins()
 
     print("OK")
