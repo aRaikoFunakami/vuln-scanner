@@ -161,6 +161,12 @@ def test_semver_ranges_never_assert_safe():
     assert judge("axios", "1.14.0")[0] == SAFE
     assert judge("axios", "1.14.1")[0] == VULNERABLE
     assert judge("litellm", "==1.82.7")[0] == VULNERABLE
+
+    # "v" prefix is an exact pin, not a range -- must not fall through to
+    # is_exact_version's SAFE branch without normalizing against the
+    # bare version stored in threats.json (regression: was falsely SAFE)
+    assert judge("axios", "v1.14.1")[0] == VULNERABLE
+    assert judge("axios", "v1.14.0")[0] == SAFE
     pre = parse_package_json(
         '{"dependencies": {"@crawlee/core": "3.17.1-beta.80"}}',
         {"@crawlee/core"},

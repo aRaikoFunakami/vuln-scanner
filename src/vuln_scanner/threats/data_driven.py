@@ -139,10 +139,17 @@ class DataDrivenThreat(ThreatDefinition):
         if normalized in self._direct_normalized:
             vulnerable = self._versions_by_package.get(normalized, set())
             if version:
-                # "==1.2.3" (PEP 508) pins exactly like "1.2.3"
+                # "==1.2.3" (PEP 508) pins exactly like "1.2.3"; a "v"
+                # prefix ("v1.2.3") is also an exact pin -- both must be
+                # normalized before the membership check, or is_exact_version
+                # (which accepts "v1.2.3") reports a vulnerable version as
+                # SAFE because the raw string never matches the bare
+                # version stored in threats.json (issue #9 follow-up).
                 version = version.strip()
                 if version.startswith("=="):
                     version = version[2:].strip()
+                if version.startswith(("v", "V")) and is_exact_version(version):
+                    version = version[1:]
                 if version in vulnerable:
                     return (
                         VULNERABLE,
@@ -156,7 +163,7 @@ class DataDrivenThreat(ThreatDefinition):
                 if range_may_include(version, vulnerable):
                     return (
                         WARNING,
-                        f"範囲指定 {version} は脆弱バージョンに解決されうる"
+                        f"バージョン指定 {version} は脆弱バージョンを除外できない"
                         "（実際に解決されたバージョンの確認が必要）",
                     )
                 return (
