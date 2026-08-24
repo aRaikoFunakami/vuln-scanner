@@ -256,18 +256,25 @@ class DataDrivenThreat(ThreatDefinition):
         )
 
     # ── Report text ──────────────────────────────────────────────────────
+    # These feed the Markdown report only, never detection. A threat with
+    # a missing/partial `report` block must still scan -- degrade to an
+    # empty section rather than crashing generate_markdown AFTER a full
+    # scan has run (issue #30).
+
+    def _report(self, key: str) -> List[str]:
+        return list(self._data.get("report", {}).get(key, []))
 
     def report_background(self) -> List[str]:
-        return list(self._data["report"]["background"])
+        return self._report("background")
 
     def report_target_packages(self) -> List[str]:
-        return list(self._data["report"]["target_packages"])
+        return self._report("target_packages")
 
     def report_vulnerable_versions(self) -> List[str]:
-        return list(self._data["report"]["vulnerable_versions"])
+        return self._report("vulnerable_versions")
 
     def report_malware_artifacts(self) -> List[str]:
-        return list(self._data["report"].get("malware_artifacts", []))
+        return self._report("malware_artifacts")
 
     def report_judgment_rows(self) -> List[str]:
-        return list(self._data["report"]["judgment_rows"])
+        return self._report("judgment_rows")

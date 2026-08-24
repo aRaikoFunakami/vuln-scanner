@@ -581,6 +581,43 @@ def test_host_artifacts_separated_from_repo_scan():
     assert host[0]["verdict"] == VULNERABLE  # still surfaced in the report
 
 
+def test_threats_json_schema_validation():
+    """Regression guard (#30): the loader must reject a malformed threat
+    entry at load time with a message naming it, instead of a bare
+    KeyError at import or a StopIteration mid-scan. Report prose is
+    optional and must degrade to empty sections, not crash."""
+    from vuln_scanner.threats import _validate_entry
+    from vuln_scanner.threats.data_driven import DataDrivenThreat
+    from vuln_scanner.threats.ecosystems import npm as npm_eco
+
+    bad_entries = [
+        {"ecosystem": "npm", "direct_packages": {"x": ["1.0"]}},   # no name
+        {"name": "y", "direct_packages": {"x": ["1.0"]}},          # no ecosystem
+        {"name": "z", "ecosystem": "go", "direct_packages": {"x": ["1.0"]}},  # unknown eco
+        {"name": "z", "ecosystem": "npm"},                          # no direct_packages
+        {"name": "w", "ecosystem": "npm", "direct_packages": {}},   # empty direct_packages
+        {"name": "v", "ecosystem": "npm", "direct_packages": {"x": "1.0"}},  # versions not list
+        "not-a-dict",
+    ]
+    for i, entry in enumerate(bad_entries):
+        try:
+            _validate_entry(entry, i)
+            raise AssertionError(f"entry {i} should have been rejected: {entry}")
+        except ValueError:
+            pass  # expected
+
+    # A well-formed entry with NO report block must load and scan; its
+    # report_* accessors degrade to [] rather than raising.
+    minimal = DataDrivenThreat(
+        {"name": "minimal", "ecosystem": "npm",
+         "direct_packages": {"foo": ["1.0.0"]}},
+        npm_eco,
+    )
+    assert minimal.report_background() == []
+    assert minimal.report_judgment_rows() == []
+    assert minimal.judge("foo", "1.0.0")[0] == VULNERABLE
+
+
 def test_judge_worst_verdict_wins():
     """judge() must consult ALL owning threats (worst verdict wins) and
     honor the ecosystem filter -- npm and PyPI names collide."""
@@ -737,6 +774,7 @@ def main():
     test_not_analyzed_never_looks_clean()
     test_symlink_escape_and_size_guard()
     test_host_artifacts_separated_from_repo_scan()
+    test_threats_json_schema_validation()
     test_scan_local_passes_ecosystem_to_judge()
     test_parsers_dict_carries_ecosystem()
     test_reporter_passes_ecosystem_to_judge()
