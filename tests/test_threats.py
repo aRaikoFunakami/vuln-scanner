@@ -18,6 +18,10 @@ from vuln_scanner.threats import (  # noqa: E402
     get_all_threats,
     judge,
 )
+from vuln_scanner.threats.base import (  # noqa: E402
+    MAX_DEP_FILE_BYTES,
+    is_within,
+)
 from vuln_scanner.threats.ecosystems.npm import (  # noqa: E402
     parse_package_lock_json,
     parse_pnpm_lock,
@@ -468,6 +472,53 @@ def test_reporter_passes_ecosystem_to_judge():
     assert eco_by_pkg.get("litellm") == "python", calls
 
 
+def test_symlink_escape_and_size_guard():
+    """Regression guard (#28): a hostile repo must not make the scanner
+    read or attribute files outside the scan root via a symlink, and an
+    oversized dependency file must be skipped (NOT_ANALYZED), not read
+    whole into memory."""
+    import json
+    import tempfile
+
+    from vuln_scanner.local_scanner import find_dependency_files, scan_local
+    from vuln_scanner.threats.ecosystems.npm import _walk_installed_versions
+
+    # glob `**` must not follow a dir symlink escaping the root
+    with tempfile.TemporaryDirectory() as root, \
+            tempfile.TemporaryDirectory() as outside:
+        os.makedirs(os.path.join(outside, "sub"))
+        with open(os.path.join(outside, "sub", "package.json"), "w") as f:
+            json.dump({"dependencies": {"axios": "1.14.1"}}, f)
+        os.symlink(outside, os.path.join(root, "evil"))
+        with open(os.path.join(root, "package.json"), "w") as f:
+            json.dump({"name": "ok"}, f)
+        files = find_dependency_files(root)
+        assert all(is_within(f, root) for f in files), files
+        assert not any(
+            os.path.realpath(f).startswith(os.path.realpath(outside)) for f in files
+        ), files
+
+    # node_modules symlink must not inject an out-of-root "installed" pkg
+    with tempfile.TemporaryDirectory() as root, \
+            tempfile.TemporaryDirectory() as outside:
+        nm = os.path.join(outside, "node_modules", "keyv")
+        os.makedirs(nm)
+        with open(os.path.join(nm, "package.json"), "w") as f:
+            json.dump({"name": "keyv", "version": "6.6.6"}, f)
+        os.makedirs(os.path.join(root, "node_modules"))
+        os.symlink(nm, os.path.join(root, "node_modules", "evil"))
+        assert _walk_installed_versions(root, {"keyv"}) == {}
+
+    # oversized dependency file -> NOT_ANALYZED, not an OOM read
+    with tempfile.TemporaryDirectory() as root:
+        with open(os.path.join(root, "requirements.txt"), "w") as f:
+            f.write("litellm==1.82.7\n")
+            f.write("x" * (MAX_DEP_FILE_BYTES + 1))
+        findings, _n, _i = scan_local(root, None)
+    assert any(f["verdict"] == NOT_ANALYZED for f in findings), findings
+    assert not any(f["package"] == "litellm" for f in findings), findings
+
+
 def test_host_artifacts_separated_from_repo_scan():
     """Regression guard (#29): host-level malware-artifact probing must
     not run inside per-repo scan_local (it would attribute host state to
@@ -659,6 +710,7 @@ def main():
     test_disk_scan_no_false_positive_from_subtree()
     test_enrich_findings_handles_multi_version_installed()
     test_not_analyzed_never_looks_clean()
+    test_symlink_escape_and_size_guard()
     test_host_artifacts_separated_from_repo_scan()
     test_scan_local_passes_ecosystem_to_judge()
     test_parsers_dict_carries_ecosystem()

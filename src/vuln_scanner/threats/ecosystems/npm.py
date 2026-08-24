@@ -14,7 +14,12 @@ import shutil
 import subprocess
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from vuln_scanner.threats.base import NOT_ANALYZED, most_severe
+from vuln_scanner.threats.base import (
+    NOT_ANALYZED,
+    file_too_large,
+    is_within,
+    most_severe,
+)
 
 # ── File-matching patterns ───────────────────────────────────────────────────
 
@@ -291,10 +296,15 @@ def _walk_installed_versions(
         pkg_name = pkg_name.lower()
         if pkg_name not in target_packages:
             return
+        # A symlink escaping the scan root must not let a hostile repo
+        # inject an "installed" version from outside it (issue #28).
+        if not is_within(pkg_dir, root_dir):
+            return
+        pkg_json = os.path.join(pkg_dir, "package.json")
+        if file_too_large(pkg_json):
+            return
         try:
-            with open(
-                os.path.join(pkg_dir, "package.json"), "r", encoding="utf-8"
-            ) as f:
+            with open(pkg_json, "r", encoding="utf-8") as f:
                 ver = json.load(f).get("version")
         except (OSError, ValueError):
             return
@@ -307,6 +317,8 @@ def _walk_installed_versions(
                 logger.debug(f"    node_modules 走査: {pkg_name}=={ver} ({pkg_dir})")
 
     def scan(node_modules_dir: str) -> None:
+        if not is_within(node_modules_dir, root_dir):
+            return  # don't descend through a symlink escaping the root (#28)
         # Only inspect DIRECT children of a real node_modules directory --
         # matching by basename anywhere in a package's own subtree (e.g.
         # a decoy test/{pkgname}/package.json) produced false positives.
@@ -570,6 +582,8 @@ def enrich_findings(
         # at this level, we parse with a broad set by reading all packages.
         # The caller should have already set up appropriate parsers.
         # Use raw parsers with a broad target set.
+        if file_too_large(f):
+            continue  # don't read a hostile multi-GB lockfile whole (#28)
         try:
             with open(f, "r", encoding="utf-8", errors="replace") as fh:
                 content = fh.read()

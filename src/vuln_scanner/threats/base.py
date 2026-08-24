@@ -8,9 +8,37 @@ Compatible with Python 3.9+.
 
 from __future__ import annotations
 
+import os
 import re
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+
+# ── Filesystem safety (untrusted repos are attacker-controlled input) ────────
+
+# Real lockfiles/manifests are well under this; anything larger is skipped
+# rather than read whole into memory (issue #28, OOM from a hostile 2 GB file).
+MAX_DEP_FILE_BYTES = 5 * 1024 * 1024
+
+
+def is_within(path: str, root: str) -> bool:
+    """True if *path* resolves to a location inside *root* (symlink-safe).
+
+    Both sides go through ``os.path.realpath`` so a symlink escaping the
+    scan root (``repo/evil -> /``) is rejected: a hostile repo must not
+    make the scanner read or attribute files outside the directory it was
+    pointed at (issue #28).
+    """
+    root_real = os.path.realpath(root)
+    path_real = os.path.realpath(path)
+    return path_real == root_real or path_real.startswith(root_real + os.sep)
+
+
+def file_too_large(path: str, limit: int = MAX_DEP_FILE_BYTES) -> bool:
+    """True if *path* is larger than *limit* bytes (missing file -> False)."""
+    try:
+        return os.path.getsize(path) > limit
+    except OSError:
+        return False
 
 # ── Verdict constants (canonical location) ──────────────────────────────────
 VULNERABLE = "VULNERABLE"

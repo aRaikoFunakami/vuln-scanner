@@ -13,7 +13,12 @@ from vuln_scanner.threats import (
     get_parser,
     judge,
 )
-from vuln_scanner.threats.base import NOT_ANALYZED, VULNERABLE
+from vuln_scanner.threats.base import (
+    NOT_ANALYZED,
+    VULNERABLE,
+    file_too_large,
+    is_within,
+)
 
 # Dependency files whose content must be valid JSON; a JSONDecodeError
 # here is a genuine "could not analyze" signal, not a coincidental zero
@@ -33,6 +38,10 @@ def find_dependency_files(root_dir):
         found.extend(glob.glob(os.path.join(root_dir, pattern), recursive=True))
     # Exclude files inside node_modules
     found = [f for f in found if "/node_modules/" not in f and "\\node_modules\\" not in f]
+    # Reject anything reached through a symlink escaping the scan root:
+    # `**` follows directory symlinks, so a hostile repo could point the
+    # scanner at files anywhere on the host (issue #28).
+    found = [f for f in found if is_within(f, root_dir)]
     # Deduplicate and sort
     return sorted(set(found))
 
@@ -102,6 +111,12 @@ def scan_local(root_dir, logger=None):
             # pattern) but no ecosystem module understands its format
             # (e.g. a future lockfile generation).
             not_analyzed(rel_path, "未対応の依存ファイル形式のため解析できませんでした")
+            continue
+
+        if file_too_large(file_path):
+            # A hostile repo could ship a multi-GB file named like a
+            # manifest; reading it whole would OOM the scanner (issue #28).
+            not_analyzed(rel_path, "ファイルサイズが上限を超えるため解析をスキップしました")
             continue
 
         try:
