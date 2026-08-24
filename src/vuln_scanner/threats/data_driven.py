@@ -17,7 +17,9 @@ from vuln_scanner.threats.base import (
     VULNERABLE,
     WARNING,
     ThreatDefinition,
+    is_exact_version,
     most_severe,
+    range_may_include,
 )
 
 
@@ -50,6 +52,16 @@ class DataDrivenThreat(ThreatDefinition):
         self._indirect: Set[str] = set(data.get("indirect_packages", []))
         self._malicious: Set[str] = set(data.get("malicious_packages", []))
         self._note_suffix: str = data.get("note_suffix", "")
+
+        # Normalized lookups, precomputed once -- judge() runs per finding
+        def _norm(names: Set[str]) -> Set[str]:
+            return {n.lower().replace("-", "_") for n in names}
+
+        self._direct_normalized = _norm(self._direct_packages_set)
+        self._indirect_normalized = _norm(self._indirect)
+        self._malicious_display = {
+            m.lower().replace("-", "_"): m for m in self._malicious
+        }
 
     # ── Properties ───────────────────────────────────────────────────────
 
@@ -107,20 +119,15 @@ class DataDrivenThreat(ThreatDefinition):
         normalized = package_name.lower().replace("-", "_")
 
         # Malicious packages -- presence alone is VULNERABLE
-        if normalized in {m.lower().replace("-", "_") for m in self._malicious}:
-            original_name = package_name
-            # Find the original (non-normalized) name for display
-            for m_name in self._malicious:
-                if m_name.lower().replace("-", "_") == normalized:
-                    original_name = m_name
-                    break
+        if normalized in self._malicious_display:
+            original_name = self._malicious_display[normalized]
             return (
                 VULNERABLE,
                 f"悪意あるパッケージ {original_name} を検出{self._note_suffix}",
             )
 
         # Indirect packages -- need further checking
-        if normalized in {i.lower().replace("-", "_") for i in self._indirect}:
+        if normalized in self._indirect_normalized:
             # Find which direct package they depend on
             direct_name = next(iter(self._direct_packages_set))
             return (
@@ -129,15 +136,33 @@ class DataDrivenThreat(ThreatDefinition):
             )
 
         # Direct packages
-        if normalized in {d.lower().replace("-", "_") for d in self._direct_packages_set}:
-            if version and version in self._versions_by_package.get(normalized, set()):
-                suffix = self._note_suffix
-                return (
-                    VULNERABLE,
-                    f"脆弱バージョン {version} を使用{suffix}",
-                )
+        if normalized in self._direct_normalized:
+            vulnerable = self._versions_by_package.get(normalized, set())
             if version:
-                return SAFE, f"バージョン {version} は安全"
+                # "==1.2.3" (PEP 508) pins exactly like "1.2.3"
+                version = version.strip()
+                if version.startswith("=="):
+                    version = version[2:].strip()
+                if version in vulnerable:
+                    return (
+                        VULNERABLE,
+                        f"脆弱バージョン {version} を使用{self._note_suffix}",
+                    )
+                if is_exact_version(version):
+                    return SAFE, f"バージョン {version} は安全"
+                # Range specifier (^1.14.0, >=1.0, ~=1.82, ...): never
+                # assert SAFE for a range that can resolve to a
+                # vulnerable version (CLAUDE.md レビュー観点4)
+                if range_may_include(version, vulnerable):
+                    return (
+                        WARNING,
+                        f"範囲指定 {version} は脆弱バージョンに解決されうる"
+                        "（実際に解決されたバージョンの確認が必要）",
+                    )
+                return (
+                    SAFE,
+                    f"範囲指定 {version} は既知の脆弱バージョンを含まない",
+                )
             return (
                 WARNING,
                 "バージョン未指定（脆弱バージョンがインストールされた可能性あり）",
