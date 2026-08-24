@@ -202,19 +202,12 @@ def scan_local(root_dir, logger=None):
                 "source": "node_modules",
             })
 
-    # 4. Check for malware artifacts
-    for threat in threats:
-        artifacts = threat.check_artifacts(logger)
-        for artifact in artifacts:
-            findings.append({
-                "repo": root_dir,
-                "file_path": artifact["path"],
-                "package": "(malware artifact)",
-                "version": None,
-                "verdict": VULNERABLE,
-                "note": f"マルウェア痕跡を検出 ({artifact['platform']})",
-                "source": "malware_artifact",
-            })
+    # NOTE: malware-artifact probing is deliberately NOT done here.
+    # check_artifacts inspects absolute HOST paths (e.g. /tmp/ld.py) that
+    # have nothing to do with the directory being scanned, so attributing
+    # a hit to this repo -- and running it once per scanned dir -- was
+    # wrong (issue #29). It now runs once at host level in
+    # scan_host_artifacts(), reported separately from per-repo verdicts.
 
     # 5. Enrich findings (e.g. fill in missing versions from lockfiles/installed).
     # Once per ecosystem: enrichment has no per-threat state and judges
@@ -228,3 +221,41 @@ def scan_local(root_dir, logger=None):
         threat.enrich_findings(findings, installed_info, dep_files, root_dir, logger)
 
     return findings, len(dep_files), installed_info
+
+
+# Sentinel repo label for host-level (not repo-scoped) findings.
+HOST_REPO = "(host)"
+
+
+def scan_host_artifacts(logger=None):
+    """Probe host-level malware artifacts once, across all threats.
+
+    These paths (e.g. ``/tmp/ld.py``) are properties of the MACHINE, not
+    of any scanned repo, so they are reported with ``repo=HOST_REPO`` and
+    source ``malware_artifact``, and the caller keeps them out of the
+    per-repo VULNERABLE exit-code gate -- a world-writable artifact path
+    must not non-deterministically fail every repo's CI (issue #29).
+
+    Returns a list of finding dicts (possibly empty).
+    """
+    findings = []
+    seen = set()
+    for threat in get_all_threats():
+        for artifact in threat.check_artifacts(logger):
+            path = artifact["path"]
+            if path in seen:
+                continue
+            seen.add(path)
+            findings.append({
+                "repo": HOST_REPO,
+                "file_path": path,
+                "package": "(malware artifact)",
+                "version": None,
+                "verdict": VULNERABLE,
+                "note": (
+                    f"ホスト上でマルウェア痕跡を検出 ({artifact['platform']}) "
+                    "— スキャン対象リポジトリとは無関係な参考情報"
+                ),
+                "source": "malware_artifact",
+            })
+    return findings

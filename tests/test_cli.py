@@ -37,10 +37,10 @@ def run_scan(project_dir):
 #   from the lockfile path (parse + enrich), so a lock-parser regression
 #   turns this red instead of hiding behind the package.json finding.
 # - e2e-clean: the stdout marker proves files were actually scanned --
-#   "scanned nothing" must not pass as "scanned clean".
-#   NOTE: this case scans the HOST too (pip freeze of the running
-#   interpreter, malware-artifact paths); a hit there makes it exit 1 on
-#   a genuinely compromised machine, which is the scanner working.
+#   "scanned nothing" must not pass as "scanned clean". Host malware-
+#   artifact paths no longer affect this exit code (issue #29); a pip
+#   freeze of the running interpreter that has a vulnerable target
+#   installed still would, which is the scanner working.
 CASES = [
     ("e2e-npm", 1, "keyv"),
     ("e2e-yarn", 1, "keyv"),
@@ -66,8 +66,43 @@ def test_exit_codes():
         assert marker in proc.stdout, (name, marker, proc.stdout[-2000:])
 
 
+def test_host_artifact_does_not_fail_repo_gate():
+    """Regression guard (#29): a host-level malware artifact present on the
+    machine must NOT make a clean repo's scan exit non-zero. Runs the CLI
+    with HOME pointed at a temp dir containing the keyv Darwin artifact so
+    the probe fires without touching the real host."""
+    import platform
+
+    if platform.system() != "Darwin":
+        return  # artifact path set is platform-specific; keep the test hermetic
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in [os.path.join(ROOT, "src"), env.get("PYTHONPATH")] if p
+    )
+    with tempfile.TemporaryDirectory() as home, \
+            tempfile.TemporaryDirectory() as proj, \
+            tempfile.TemporaryDirectory() as out:
+        agents = os.path.join(home, "Library", "LaunchAgents")
+        os.makedirs(agents)
+        open(os.path.join(agents, "com.user.gh-token-monitor.plist"), "w").close()
+        with open(os.path.join(proj, "package.json"), "w") as f:
+            f.write('{"name": "clean", "version": "1.0.0"}')
+        env["HOME"] = home
+        proc = subprocess.run(
+            [sys.executable, "-m", "vuln_scanner.scanner",
+             "--local", proj, "--output-dir", out],
+            capture_output=True, text=True, env=env, timeout=120,
+        )
+    # clean repo, host artifact present -> still exit 0 (artifact excluded
+    # from the gate) but surfaced in the report
+    assert proc.returncode == 0, (proc.returncode, proc.stdout[-2000:])
+    assert "malware" in proc.stdout.lower() or "マルウェア" in proc.stdout
+
+
 def main():
     test_exit_codes()
+    test_host_artifact_does_not_fail_repo_gate()
     print("OK")
 
 

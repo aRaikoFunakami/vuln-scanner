@@ -468,6 +468,43 @@ def test_reporter_passes_ecosystem_to_judge():
     assert eco_by_pkg.get("litellm") == "python", calls
 
 
+def test_host_artifacts_separated_from_repo_scan():
+    """Regression guard (#29): host-level malware-artifact probing must
+    not run inside per-repo scan_local (it would attribute host state to
+    the repo and re-probe once per dir), and scan_host_artifacts must
+    dedupe across threats and label findings as host-scoped."""
+    import tempfile
+
+    import vuln_scanner.local_scanner as ls
+
+    # 1. scan_local must not emit malware_artifact findings anymore
+    with tempfile.TemporaryDirectory() as root:
+        with open(os.path.join(root, "package.json"), "w") as f:
+            f.write("{}")
+        findings, _n, _i = ls.scan_local(root, None)
+    assert not [f for f in findings if f["source"] == "malware_artifact"], findings
+
+    # 2. scan_host_artifacts: dedupe across threats, host-scoped label,
+    #    excluded from the repo-vulnerable exit gate.
+    threats = get_all_threats()
+    originals = [t.check_artifacts for t in threats]
+    try:
+        for t in threats:
+            t.check_artifacts = lambda logger=None: [
+                {"path": "/tmp/planted-artifact", "platform": "Linux"}
+            ]
+        host = ls.scan_host_artifacts(None)
+    finally:
+        for t, o in zip(threats, originals):
+            t.check_artifacts = o
+
+    assert len(host) == 1, host  # one path, deduped across all threats
+    assert host[0]["repo"] == ls.HOST_REPO, host
+    assert host[0]["source"] == "malware_artifact", host
+    # the scanner exit gate excludes malware_artifact from repo-vulnerable
+    assert host[0]["verdict"] == VULNERABLE  # still surfaced in the report
+
+
 def test_judge_worst_verdict_wins():
     """judge() must consult ALL owning threats (worst verdict wins) and
     honor the ecosystem filter -- npm and PyPI names collide."""
@@ -622,6 +659,7 @@ def main():
     test_disk_scan_no_false_positive_from_subtree()
     test_enrich_findings_handles_multi_version_installed()
     test_not_analyzed_never_looks_clean()
+    test_host_artifacts_separated_from_repo_scan()
     test_scan_local_passes_ecosystem_to_judge()
     test_parsers_dict_carries_ecosystem()
     test_reporter_passes_ecosystem_to_judge()

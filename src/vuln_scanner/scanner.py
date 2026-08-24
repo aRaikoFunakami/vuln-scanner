@@ -287,6 +287,12 @@ def main():
         all_repos.extend(local_repos)
         all_installed.extend(installed)
 
+    # Host-level malware-artifact probe: once per invocation, not per repo,
+    # and kept out of the per-repo exit-code gate below (issue #29).
+    from vuln_scanner.local_scanner import scan_host_artifacts
+    host_findings = scan_host_artifacts(logger)
+    all_findings.extend(host_findings)
+
     # Output results
     csv_path = os.path.join(output_dir, "scan_results.csv")
     json_path = os.path.join(output_dir, "scan_results.json")
@@ -312,7 +318,15 @@ def main():
     # analyzed (judgment withheld -- issue #11), and no VULNERABLE
     # finding overrode that. VULNERABLE always wins: a real detection
     # must never be masked by an unrelated parse failure elsewhere.
-    if any(f["verdict"] == VULNERABLE for f in all_findings):
+    # Host-level malware artifacts (source "malware_artifact") are
+    # informational host state, not a scanned-repo vulnerability, so they
+    # are excluded from the gate -- a planted world-writable artifact path
+    # must not fail every repo's CI (issue #29). They still appear in the
+    # report.
+    def repo_vulnerable(f):
+        return f["verdict"] == VULNERABLE and f["source"] != "malware_artifact"
+
+    if any(repo_vulnerable(f) for f in all_findings):
         return 1
     if any(f["verdict"] == NOT_ANALYZED for f in all_findings):
         return 3
