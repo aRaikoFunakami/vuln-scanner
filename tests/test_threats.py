@@ -10,19 +10,53 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from vuln_scanner.threats import get_all_threats, judge  # noqa: E402
+from vuln_scanner.threats import (  # noqa: E402
+    SAFE,
+    VULNERABLE,
+    WARNING,
+    get_all_threats,
+    judge,
+)
 from vuln_scanner.threats.ecosystems.npm import (  # noqa: E402
     parse_package_lock_json,
     parse_pnpm_lock,
 )
 
 
+# Real `npm install --package-lock-only` output (npm 11, lockfileVersion 3).
+# The malicious keyv@6.0.0 is unpublished from the registry, so the lock was
+# generated with benign versions and only the version strings / the dummy
+# package name were substituted afterwards (CLAUDE.md レビュー観点1).
+FIXTURE_LOCK = os.path.join(
+    os.path.dirname(__file__), "fixtures", "package-lock.json"
+)
+
+
+def _make_finding(root, package):
+    return {
+        "repo": root,
+        "file_path": "package.json",
+        "package": package,
+        "version": None,
+        "verdict": WARNING,
+        "note": "",
+        "source": "dependency_file",
+    }
+
+
 def test_enrich_does_not_flip_verdicts():
-    """Regression guard (#5): an unrelated threat's enrich_findings must
-    judge across all registered threats -- its own judge returns SAFE for
-    out-of-scope packages, which used to flip existing VULNERABLE verdicts
-    when a new npm threat was appended to threats.json."""
-    import json
+    """Regression guard (#5): appending a threat must not flip verdicts.
+
+    Replays the local_scanner enrich phase with every registered threat
+    plus an unrelated dummy appended LAST (the threats.json-append
+    scenario): the dummy's own judge returns SAFE for out-of-scope
+    packages and used to overwrite the keyv VULNERABLE verdict.
+    Also pins:
+    - a not-yet-registered threat still judges its own packages
+    - enrichment is idempotent (a second full pass changes nothing)
+    """
+    import copy
+    import shutil
     import tempfile
 
     from vuln_scanner.threats.data_driven import DataDrivenThreat
@@ -32,30 +66,41 @@ def test_enrich_does_not_flip_verdicts():
         {
             "name": "unrelated-example",
             "ecosystem": "npm",
-            "direct_packages": {"lodash": ["4.99.99"]},
+            "direct_packages": {"vuln-scanner-selftest-pkg": ["4.99.99"]},
         },
         npm_eco,
     )
 
     with tempfile.TemporaryDirectory() as root:
         lock_path = os.path.join(root, "package-lock.json")
-        with open(lock_path, "w") as f:
-            json.dump(
-                {"packages": {"node_modules/keyv": {"version": "6.0.0"}}}, f
-            )
-        findings = [{
-            "repo": root,
-            "file_path": "package.json",
-            "package": "keyv",
-            "version": None,
-            "verdict": "WARNING",
-            "note": "",
-            "source": "dependency_file",
-        }]
-        dummy.enrich_findings(findings, [], [lock_path], root)
+        shutil.copy(FIXTURE_LOCK, lock_path)
+        findings = [
+            _make_finding(root, "keyv"),
+            _make_finding(root, "vuln-scanner-selftest-pkg"),
+        ]
+        threat_order = list(get_all_threats()) + [dummy]
+        for threat in threat_order:
+            threat.enrich_findings(findings, [], [lock_path], root)
+        snapshot = copy.deepcopy(findings)
+        for threat in threat_order:
+            threat.enrich_findings(findings, [], [lock_path], root)
+        assert findings == snapshot, "enrich must be idempotent"
 
-    assert findings[0]["version"] == "6.0.0", findings[0]
-    assert findings[0]["verdict"] == "VULNERABLE", findings[0]
+    keyv_f, selftest_f = findings
+    assert keyv_f["version"] == "6.0.0", keyv_f
+    assert keyv_f["verdict"] == VULNERABLE, keyv_f
+    # The unregistered dummy must still judge its own package
+    assert selftest_f["version"] == "4.99.99", selftest_f
+    assert selftest_f["verdict"] == VULNERABLE, selftest_f
+
+
+def test_judge_worst_verdict_wins():
+    """judge() must consult ALL owning threats (worst verdict wins) and
+    honor the ecosystem filter -- npm and PyPI names collide."""
+    # ecosystem filter: keyv is an npm threat
+    assert judge("keyv", "6.0.0", ecosystem="npm")[0] == VULNERABLE
+    assert judge("keyv", "6.0.0", ecosystem="python")[0] == SAFE
+    assert judge("keyv", "6.0.0")[0] == VULNERABLE
 
 
 def main():
@@ -102,6 +147,7 @@ def main():
     assert judge("plain-crypto-js", None)[0] == "VULNERABLE"
 
     test_enrich_does_not_flip_verdicts()
+    test_judge_worst_verdict_wins()
 
     print("OK")
 

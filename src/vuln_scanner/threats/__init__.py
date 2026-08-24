@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Callable, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from vuln_scanner.threats.base import (  # noqa: F401 – re-export
     VULNERABLE,
@@ -16,16 +16,25 @@ from vuln_scanner.threats.base import (  # noqa: F401 – re-export
     WARNING,
     CHECK_INDIRECT,
     ThreatDefinition,
+    most_severe,
 )
 
 # ── Registry ────────────────────────────────────────────────────────────────
 
 _THREATS: List[ThreatDefinition] = []
 
+# Normalized package names owned by each threat, precomputed at register()
+# time: judge() runs once per finding and must not rebuild a 400-element
+# set per call.
+_OWNED_NORMALIZED: Dict[int, Set[str]] = {}
+
 
 def register(threat: ThreatDefinition) -> None:
     """Register a threat definition."""
     _THREATS.append(threat)
+    _OWNED_NORMALIZED[id(threat)] = {
+        p.lower().replace("-", "_") for p in threat.all_packages
+    }
 
 
 def get_all_threats() -> List[ThreatDefinition]:
@@ -96,14 +105,28 @@ def get_parser(file_path: str) -> Optional[Callable]:
     return _composite
 
 
-def judge(package_name: str, version: Optional[str]) -> Tuple[str, str]:
-    """Delegate judgment to the threat that owns *package_name*."""
+def judge(
+    package_name: str,
+    version: Optional[str],
+    ecosystem: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Judge *package_name* across every registered threat that owns it.
+
+    Consults ALL owning threats and returns the most severe verdict, so a
+    package listed by two threats is never masked by whichever registered
+    first.  Pass *ecosystem* to restrict to threats of that ecosystem --
+    npm and PyPI package names collide, and a version that is malicious on
+    one registry says nothing about the other.
+    """
     normalized = package_name.lower().replace("-", "_")
+    best: Optional[Tuple[str, str]] = None
     for t in _THREATS:
-        owned = {p.lower().replace("-", "_") for p in t.all_packages}
-        if normalized in owned:
-            return t.judge(package_name, version)
-    return SAFE, "対象外パッケージ"
+        if ecosystem is not None and t.ecosystem != ecosystem:
+            continue
+        if normalized in _OWNED_NORMALIZED[id(t)]:
+            result = t.judge(package_name, version)
+            best = result if best is None else most_severe(best, result)
+    return best if best is not None else (SAFE, "対象外パッケージ")
 
 
 # ── Auto-load threats from JSON ─────────────────────────────────────────────

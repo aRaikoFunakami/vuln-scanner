@@ -18,6 +18,20 @@ SAFE = "SAFE"
 WARNING = "WARNING"
 CHECK_INDIRECT = "CHECK_INDIRECT"
 
+# Severity order for combining verdicts from multiple threats: a package
+# listed by two threats must get the worst applicable verdict, never be
+# masked by whichever threat happened to answer first.
+_VERDICT_SEVERITY = {SAFE: 0, CHECK_INDIRECT: 1, WARNING: 2, VULNERABLE: 3}
+
+
+def most_severe(*results: Tuple[str, str]) -> Tuple[str, str]:
+    """Return the ``(verdict, note)`` with the highest severity.
+
+    Ties keep the earliest argument, so callers can put the preferred
+    source first.
+    """
+    return max(results, key=lambda r: _VERDICT_SEVERITY.get(r[0], 0))
+
 
 class ThreatDefinition(ABC):
     """Base class for a supply-chain threat definition.

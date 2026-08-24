@@ -432,6 +432,16 @@ def enrich_findings(
     # Build parsers for lockfile re-parsing (we need target_packages but
     # the lockfile parsers in the parsers dict already have them bound,
     # so we reconstruct from dep_files basenames).
+    # Determine all packages we care about from installed_info + findings
+    # (loop-invariant: built once, not per lockfile)
+    all_targets: Set[str] = set()
+    for env in installed_info:
+        all_targets.update(env.get("packages", {}).keys())
+    for finding in findings:
+        pkg_name = finding.get("package")
+        if pkg_name:
+            all_targets.add(pkg_name)
+
     # Build lockfile_versions: {directory: {pkg: (version, lockfile_relpath)}}
     lockfile_versions: Dict[str, Dict[str, Tuple[str, str]]] = {}
     for f in dep_files:
@@ -447,13 +457,6 @@ def enrich_findings(
                 content = fh.read()
         except OSError:
             continue
-
-        # Determine all packages we care about from installed_info + findings
-        all_targets: Set[str] = set()
-        for env in installed_info:
-            all_targets.update(env.get("packages", {}).keys())
-        for finding in findings:
-            all_targets.add(finding.get("package", ""))
 
         if basename == "package-lock.json":
             parsed = parse_package_lock_json(content, all_targets)
@@ -491,10 +494,10 @@ def enrich_findings(
         if pkg in dir_locks:
             lock_ver, lock_file = dir_locks[pkg]
             finding["version"] = lock_ver
-            verdict, _ = judge_fn(pkg, lock_ver)
+            verdict, judge_note = judge_fn(pkg, lock_ver)
             finding["verdict"] = verdict
             finding["note"] = (
-                f"lockfile ({lock_file}) による実バージョン: {lock_ver}"
+                f"{judge_note}（lockfile {lock_file} による実バージョン: {lock_ver}）"
             )
             if logger:
                 logger.info(
@@ -510,10 +513,11 @@ def enrich_findings(
                 if pkg in npm_pkgs:
                     actual_ver = npm_pkgs[pkg]
                     finding["version"] = actual_ver
-                    verdict, _ = judge_fn(pkg, actual_ver)
+                    verdict, judge_note = judge_fn(pkg, actual_ver)
                     finding["verdict"] = verdict
                     finding["note"] = (
-                        f"node_modules の実バージョン: {actual_ver} ({npm_env_key})"
+                        f"{judge_note}"
+                        f"（node_modules の実バージョン: {actual_ver}, {npm_env_key}）"
                     )
                     if logger:
                         logger.info(

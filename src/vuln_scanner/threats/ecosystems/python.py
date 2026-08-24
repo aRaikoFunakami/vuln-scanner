@@ -494,11 +494,11 @@ def enrich_findings(
             actual_ver, env_label = all_installed_pkgs[pkg]
             if not finding["version"]:
                 finding["version"] = actual_ver
-                verdict, _ = judge_fn(pkg, actual_ver)
+                verdict, judge_note = judge_fn(pkg, actual_ver)
                 finding["verdict"] = verdict
                 finding["note"] = (
-                    f"バージョン未指定だが実環境では {actual_ver} が"
-                    f"インストール済み ({env_label})"
+                    f"{judge_note}（バージョン未指定だが実環境では"
+                    f" {actual_ver} がインストール済み: {env_label}）"
                 )
                 if logger:
                     logger.info(
