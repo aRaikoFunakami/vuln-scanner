@@ -387,26 +387,32 @@ def test_judge_worst_verdict_wins():
     assert judge("keyv", "6.0.0")[0] == VULNERABLE
 
 
-def main():
-    threats = {t.name: t for t in get_all_threats()}
-
-    keyv = threats["keyv"]
+def test_judge_basic_verdicts():
+    """The keyv threat's 394 packages must all be exposed for
+    parsing/judgment (regression: only the first direct_packages entry
+    used to be exposed for a mass-worm threat), and judge() basics
+    (VULNERABLE/SAFE, prerelease versions) must hold."""
+    keyv = {t.name: t for t in get_all_threats()}["keyv"]
     assert len(keyv.all_packages) == 394, len(keyv.all_packages)
     assert judge("keyv", "6.0.0")[0] == "VULNERABLE"
     assert judge("keyv", "5.0.0")[0] == "SAFE"
     assert judge("@crawlee/core", "3.17.1-beta.80")[0] == "VULNERABLE"
     assert judge("cache-manager", "8.0.0")[0] == "SAFE"
 
-    # Regression guard: with 394 packages sharing one threat, a version
-    # malicious for package A must not be flagged VULNERABLE for unrelated
-    # package B just because the version string happens to collide.
+
+def test_judge_no_version_collision_across_shared_threat():
+    """Regression guard: with 394 packages sharing one threat, a version
+    malicious for package A must not be flagged VULNERABLE for unrelated
+    package B just because the version string happens to collide."""
     assert judge("@adminide-stack/clock-tik-browser", "1.81.0")[0] == "SAFE"
     assert judge("@adminide-stack/clock-tik-browser", "12.0.24")[0] == "VULNERABLE"
     assert judge("@7n/rules", "1.81.0")[0] == "VULNERABLE"
 
-    # Regression guard: scoped package names must survive lockfile parsing
-    # (package-lock.json v2/v3 and pnpm-lock.yaml both strip everything
-    # before the last "/" naively if not handled).
+
+def test_package_lock_json_scoped_names():
+    """Regression guard: scoped package names must survive lockfile
+    parsing (package-lock.json v2/v3 strips everything before the last
+    "/" naively if not handled)."""
     targets = {"@arv-bedrock/auth", "keyv"}
     lock_json = (
         '{"packages": {'
@@ -418,37 +424,69 @@ def main():
         ("@arv-bedrock/auth", "1.1.7"),
         ("keyv", "6.0.0"),
     }
-    # All three pnpm lockfile generations, from real `pnpm install
-    # --lockfile-only` output (pnpm 7 / 8 / 11) with names/versions
-    # substituted -- the malicious versions are unpublished so a lock for
-    # them cannot be generated directly (issue #6).
-    # List (not set) equality: each package must be reported exactly once
-    # (v9 repeats every package under `snapshots:`), scoped quoting must
-    # not leak into versions, and `(peer)` / `_peer` suffixes must be
-    # stripped.
-    lock_targets = {
-        "@arv-bedrock/auth", "keyv", "react", "use-sync-external-store",
-    }
-    lock_expected = [
-        ("@arv-bedrock/auth", "1.1.7"),
-        ("keyv", "6.0.0"),
-        ("react", "18.3.1"),
-        ("use-sync-external-store", "1.2.2"),
-    ]
+
+
+# Shared expected result for the pnpm/yarn all-generations tests below:
+# both lockfile families resolve the same four packages to the same
+# versions once scoped/quoted/peer-suffix handling is correct.
+_LOCK_TARGETS = {"@arv-bedrock/auth", "keyv", "react", "use-sync-external-store"}
+_LOCK_EXPECTED = [
+    ("@arv-bedrock/auth", "1.1.7"),
+    ("keyv", "6.0.0"),
+    ("react", "18.3.1"),
+    ("use-sync-external-store", "1.2.2"),
+]
+
+
+def test_pnpm_lock_all_generations():
+    """Regression guard (#6, N01): pnpm-lock.yaml v9 (current default)
+    quotes scoped keys -- the closing quote used to leak into the
+    extracted version, judging a vulnerable scoped package SAFE. Covers
+    all three generations (real `pnpm install --lockfile-only` output,
+    pnpm 7/8/11, names/versions substituted -- the malicious versions
+    are unpublished so a lock for them can't be generated directly),
+    plus the negative-space and dotted-name cases found while fixing it.
+    """
     for gen in ("v5", "v6", "v9"):
         with open(_fixture(f"pnpm-lock-{gen}.yaml")) as f:
-            parsed = parse_pnpm_lock(f.read(), lock_targets)
-        assert parsed == lock_expected, (gen, parsed)
+            parsed = parse_pnpm_lock(f.read(), _LOCK_TARGETS)
+        # List (not set) equality: each package must be reported exactly
+        # once (v9 repeats every package under `snapshots:`), scoped
+        # quoting must not leak into versions, and `(peer)`/`_peer`
+        # suffixes must be stripped.
+        assert parsed == _LOCK_EXPECTED, (gen, parsed)
 
-    # yarn classic (v1) and berry (v2+), from real `yarn install` output
-    # (yarn 1.22 / yarn 4.6) with names/versions substituted (issue #8).
-    # Berry writes `version: 1.1.7` (colon-separated, unquoted), which the
-    # parser previously could not read at all -- not even as WARNING.
+    # Negative space: keys outside the `packages:` section must not be
+    # reported -- `overrides:` names a version that is not necessarily
+    # installed, `snapshots:` would double-count. (Synthetic snippet: a
+    # does-not-detect probe, not lockfile fixture data.)
+    not_installed = (
+        "overrides:\n"
+        "  keyv@6.0.0: ^7.0.0\n"
+        "snapshots:\n"
+        "  keyv@6.0.0:\n"
+    )
+    assert parse_pnpm_lock(not_installed, {"keyv"}) == []
+
+    # Dotted package names (threats.json lists e.g. hamus.js) must parse
+    assert parse_pnpm_lock(
+        "packages:\n  hamus.js@1.0.4:\n", {"hamus.js"}
+    ) == [("hamus.js", "1.0.4")]
+
+
+def test_yarn_lock_all_generations():
+    """Regression guard (#8, N02): yarn berry (v2+) writes
+    `version: 1.1.7` (colon-separated, unquoted) instead of classic's
+    `version "1.1.7"` -- the parser used to read berry lockfiles as
+    completely empty (not even WARNING). Real `yarn install` output
+    (yarn 1.22 / yarn 4.6), names/versions substituted, plus the
+    workspace-placeholder and virtual-dedup cases found while fixing it.
+    """
     for gen in ("classic", "berry"):
         with open(_fixture(f"yarn-{gen}.lock")) as f:
             yarn_content = f.read()
-        parsed = parse_yarn_lock(yarn_content, lock_targets)
-        assert parsed == lock_expected, (gen, parsed)
+        parsed = parse_yarn_lock(yarn_content, _LOCK_TARGETS)
+        assert parsed == _LOCK_EXPECTED, (gen, parsed)
 
     # Berry workspace entries carry the placeholder version
     # "0.0.0-use.local"; emitting it would judge the package SAFE with a
@@ -469,29 +507,23 @@ def main():
         ("react-dom", "18.3.1")
     ]
 
-    # Negative space: keys outside the `packages:` section must not be
-    # reported -- `overrides:` names a version that is not necessarily
-    # installed, `snapshots:` would double-count.  (Synthetic snippet:
-    # a does-not-detect probe, not lockfile fixture data.)
-    not_installed = (
-        "overrides:\n"
-        "  keyv@6.0.0: ^7.0.0\n"
-        "snapshots:\n"
-        "  keyv@6.0.0:\n"
-    )
-    assert parse_pnpm_lock(not_installed, {"keyv"}) == []
 
-    # Dotted package names (threats.json lists e.g. hamus.js) must parse
-    assert parse_pnpm_lock(
-        "packages:\n  hamus.js@1.0.4:\n", {"hamus.js"}
-    ) == [("hamus.js", "1.0.4")]
-
-    # Regression guard: single direct_package threats still work.
-    axios = threats["axios"]
+def test_single_direct_package_threat():
+    """Regression guard: single direct_package threats (as opposed to
+    keyv's 394-package mass worm) still work end to end."""
+    axios = {t.name: t for t in get_all_threats()}["axios"]
     assert axios.all_packages == {"axios", "plain-crypto-js"}
     assert judge("axios", "1.14.1")[0] == "VULNERABLE"
     assert judge("plain-crypto-js", None)[0] == "VULNERABLE"
 
+
+def main():
+    test_judge_basic_verdicts()
+    test_judge_no_version_collision_across_shared_threat()
+    test_package_lock_json_scoped_names()
+    test_pnpm_lock_all_generations()
+    test_yarn_lock_all_generations()
+    test_single_direct_package_threat()
     test_enrich_does_not_flip_verdicts()
     test_enrich_most_severe_lock_version()
     test_semver_ranges_never_assert_safe()
