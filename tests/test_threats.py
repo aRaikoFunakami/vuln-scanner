@@ -330,6 +330,17 @@ def test_scan_local_passes_ecosystem_to_judge():
     assert eco_by_pkg.get("litellm") == "python", calls
 
 
+def test_parsers_dict_carries_ecosystem():
+    """Regression guard (#16 follow-up): the PARSERS backward-compat facade
+    (dependency_parser.py) must tag its callables with .ecosystem too, or a
+    legacy caller reading PARSERS[...] directly has no way to filter judge()
+    by ecosystem the way get_parser() callers can."""
+    from vuln_scanner.dependency_parser import PARSERS
+
+    assert PARSERS["requirements"].ecosystem == "python"
+    assert PARSERS["package.json"].ecosystem == "npm"
+
+
 def test_reporter_passes_ecosystem_to_judge():
     """Regression guard (#16 follow-up): generate_markdown's installed-
     packages judge() call must pass ecosystem too -- code review on PR #22
@@ -489,6 +500,7 @@ def main():
     test_enrich_findings_handles_multi_version_installed()
     test_not_analyzed_never_looks_clean()
     test_scan_local_passes_ecosystem_to_judge()
+    test_parsers_dict_carries_ecosystem()
     test_reporter_passes_ecosystem_to_judge()
     test_judge_worst_verdict_wins()
 
