@@ -265,37 +265,112 @@ def match_file(
 # ── Helpers for local scanning ───────────────────────────────────────────────
 
 
-def _read_node_module_version(root_dir: str, pkg_name: str) -> Optional[str]:
-    """Read version from ``node_modules/{pkg}/package.json`` directly.
+def _walk_installed_versions(
+    root_dir: str,
+    target_packages: Set[str],
+    logger: Any = None,
+) -> Dict[str, List[str]]:
+    """Recursively find every on-disk copy of *target_packages* under
+    ``node_modules``.
 
-    Returns version string or ``None``.
+    Matches by directory basename (``name`` or ``@scope/name``), so this
+    reaches all three layouts CLAUDE.md calls out: npm's hoisted
+    top-level ``node_modules/{pkg}``, pnpm's content store
+    (``node_modules/.pnpm/{pkg}@{ver}/node_modules/{pkg}`` -- a real
+    directory, not a symlink, so no ``followlinks`` needed), and
+    npm/yarn's non-hoisted nested ``node_modules/{dep}/node_modules/{pkg}``
+    (issue #10).
+
+    Returns ``{package_name: [version, ...]}`` -- a package can be
+    installed at more than one version across locations; every copy is
+    reported rather than collapsed to one.
     """
-    pkg_json_path = os.path.join(root_dir, "node_modules", pkg_name, "package.json")
-    if not os.path.isfile(pkg_json_path):
-        return None
-    try:
-        with open(pkg_json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data.get("version")
-    except (OSError, ValueError):
-        return None
+    found: Dict[str, List[str]] = {}
+
+    def record(pkg_name: str, pkg_dir: str) -> None:
+        pkg_name = pkg_name.lower()
+        if pkg_name not in target_packages:
+            return
+        try:
+            with open(
+                os.path.join(pkg_dir, "package.json"), "r", encoding="utf-8"
+            ) as f:
+                ver = json.load(f).get("version")
+        except (OSError, ValueError):
+            return
+        if not ver:
+            return
+        versions = found.setdefault(pkg_name, [])
+        if ver not in versions:
+            versions.append(ver)
+            if logger:
+                logger.debug(f"    node_modules 走査: {pkg_name}=={ver} ({pkg_dir})")
+
+    def scan(node_modules_dir: str) -> None:
+        # Only inspect DIRECT children of a real node_modules directory --
+        # matching by basename anywhere in a package's own subtree (e.g.
+        # a decoy test/{pkgname}/package.json) produced false positives.
+        try:
+            entries = os.listdir(node_modules_dir)
+        except OSError:
+            return
+        for entry in entries:
+            if entry in _WALK_SKIP_DIRS:
+                continue
+            entry_path = os.path.join(node_modules_dir, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            if entry == ".pnpm":
+                # pnpm's content store: node_modules/.pnpm/{name}@{ver}/
+                # node_modules/{name} -- a real directory, not a symlink
+                try:
+                    store_entries = os.listdir(entry_path)
+                except OSError:
+                    store_entries = []
+                for store_entry in store_entries:
+                    store_nm = os.path.join(entry_path, store_entry, "node_modules")
+                    if os.path.isdir(store_nm):
+                        scan(store_nm)
+                continue
+            if entry.startswith("@"):
+                try:
+                    scoped_entries = os.listdir(entry_path)
+                except OSError:
+                    scoped_entries = []
+                for scoped in scoped_entries:
+                    scoped_path = os.path.join(entry_path, scoped)
+                    if not os.path.isdir(scoped_path):
+                        continue
+                    record(f"{entry}/{scoped}", scoped_path)
+                    nested = os.path.join(scoped_path, "node_modules")
+                    if os.path.isdir(nested):
+                        scan(nested)
+                continue
+            record(entry, entry_path)
+            nested = os.path.join(entry_path, "node_modules")
+            if os.path.isdir(nested):
+                scan(nested)  # non-hoisted nested dependency
+
+    scan(os.path.join(root_dir, "node_modules"))
+    return found
 
 
 def _check_npm_packages(
     root_dir: str,
     target_packages: Set[str],
     logger: Any = None,
-) -> Dict[str, str]:
+) -> Dict[str, List[str]]:
     """Check installed npm package versions in *root_dir*.
 
-    Tries ``npm list --json --depth=0`` first (accepts returncode 0 or 1),
-    then falls back to reading ``node_modules/{pkg}/package.json`` directly.
+    Tries ``npm list --json --depth=0`` first (accepts returncode 0 or 1)
+    for direct dependencies, then recursively walks ``node_modules``
+    (hoisted top-level, pnpm store, nested) for every copy found.
 
-    Returns ``{package_name: version}`` for detected packages.
+    Returns ``{package_name: [version, ...]}`` for detected packages.
     """
-    installed: Dict[str, str] = {}
+    installed: Dict[str, List[str]] = {}
 
-    # Method 1: npm list --json
+    # Method 1: npm list --json (direct dependencies only)
     if shutil.which("npm"):
         try:
             result = subprocess.run(
@@ -312,7 +387,7 @@ def _check_npm_packages(
                     if pkg_name.lower() in target_packages:
                         ver = info.get("version")
                         if ver:
-                            installed[pkg_name.lower()] = ver
+                            installed.setdefault(pkg_name.lower(), []).append(ver)
                             if logger:
                                 logger.debug(
                                     f"    npm list 検出: {pkg_name}=={ver}"
@@ -320,15 +395,13 @@ def _check_npm_packages(
         except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
             pass
 
-    # Method 2: direct read of node_modules/{pkg}/package.json (fallback)
-    for pkg in target_packages:
-        if pkg in installed:
-            continue
-        ver = _read_node_module_version(root_dir, pkg)
-        if ver:
-            installed[pkg] = ver
-            if logger:
-                logger.debug(f"    node_modules 直接読み取り: {pkg}=={ver}")
+    # Method 2: recursive node_modules walk -- covers transitive/nested/
+    # pnpm-store copies npm list --depth=0 never reports
+    for pkg, versions in _walk_installed_versions(root_dir, target_packages, logger).items():
+        existing = installed.setdefault(pkg, [])
+        for ver in versions:
+            if ver not in existing:
+                existing.append(ver)
 
     return installed
 
@@ -369,9 +442,6 @@ def check_installed(
 
         npm_installed = _check_npm_packages(npm_dir, target_packages, logger)
 
-        # Filter out entries where version is None
-        npm_installed = {k: v for k, v in npm_installed.items() if v is not None}
-
         if npm_installed:
             installed_info.append(
                 {
@@ -385,6 +455,9 @@ def check_installed(
     return installed_info
 
 
+_WALK_SKIP_DIRS = {".git", "__pycache__", ".tox", ".bin"}
+
+
 def find_malicious_dirs(
     root_dir: str,
     malicious_dir_names: List[str],
@@ -392,15 +465,20 @@ def find_malicious_dirs(
 ) -> List[str]:
     """Walk *root_dir* looking for ``node_modules/{name}`` directories.
 
+    Descends into every ``node_modules`` found, including nested ones
+    (npm/yarn's non-hoisted layout puts a dependency's own dependencies
+    under ``node_modules/{dep}/node_modules/``) and pnpm's content
+    store (``node_modules/.pnpm/{name}@{ver}/node_modules/{name}``,
+    itself a real directory, not a symlink -- reachable without
+    following symlinks).
+
     *malicious_dir_names* is a list of package names to search for.
 
     Returns list of absolute paths.
     """
     found: List[str] = []
     for dirpath, dirnames, _filenames in os.walk(root_dir):
-        dirnames[:] = [
-            d for d in dirnames if d not in {".git", "__pycache__", ".tox"}
-        ]
+        dirnames[:] = [d for d in dirnames if d not in _WALK_SKIP_DIRS]
         if os.path.basename(dirpath) == "node_modules":
             for name in malicious_dir_names:
                 malicious_dir = os.path.join(dirpath, name)
@@ -410,8 +488,9 @@ def find_malicious_dirs(
                         logger.warning(
                             f"    !! 悪意あるパッケージ検出: {malicious_dir}"
                         )
-            # Don't recurse further into node_modules
-            dirnames.clear()
+            # Deliberately keep recursing (no dirnames.clear() here):
+            # nested node_modules and the pnpm store both live inside
+            # a node_modules directory (issue #10).
     return found
 
 
@@ -553,23 +632,32 @@ def enrich_findings(
                 )
             continue
 
-        # 2. Fallback: npm installed version from node_modules
+        # 2. Fallback: npm installed version(s) from node_modules -- a
+        # package can have several on-disk copies (hoisted + pnpm-store/
+        # nested, issue #10), so judge every one and keep the worst.
         npm_env_key = f"npm:{os.path.relpath(finding_dir, root_dir)}"
         for env in installed_info:
             if env["environment"] == npm_env_key:
                 npm_pkgs = env["packages"]
                 if pkg in npm_pkgs:
-                    actual_ver = npm_pkgs[pkg]
-                    finding["version"] = actual_ver
-                    verdict, judge_note = judge_fn(pkg, actual_ver)
-                    finding["verdict"] = verdict
-                    finding["note"] = (
-                        f"{judge_note}"
-                        f"（node_modules の実バージョン: {actual_ver}, {npm_env_key}）"
-                    )
-                    if logger:
-                        logger.info(
-                            f"    npm バージョン補完: {pkg} → {actual_ver}"
-                            f" ({npm_env_key}) → {verdict}"
+                    raw = npm_pkgs[pkg]
+                    versions = raw if isinstance(raw, list) else [raw]
+                    best = None
+                    for actual_ver in versions:
+                        result = judge_fn(pkg, actual_ver)
+                        if best is None or most_severe(best[0], result) is result:
+                            best = (result, actual_ver)
+                    if best is not None:
+                        (verdict, judge_note), actual_ver = best
+                        finding["version"] = actual_ver
+                        finding["verdict"] = verdict
+                        finding["note"] = (
+                            f"{judge_note}"
+                            f"（node_modules の実バージョン: {actual_ver}, {npm_env_key}）"
                         )
+                        if logger:
+                            logger.info(
+                                f"    npm バージョン補完: {pkg} → {actual_ver}"
+                                f" ({npm_env_key}) → {verdict}"
+                            )
                 break

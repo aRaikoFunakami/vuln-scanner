@@ -44,6 +44,10 @@ def run_scan(project_dir):
 CASES = [
     ("e2e-npm", 1, "keyv"),
     ("e2e-yarn", 1, "keyv"),
+    # package.json declares the vulnerable range with no lockfile pin --
+    # detected only via the node_modules disk scan (issue #10 follow-up:
+    # this exact combination used to crash enrich_findings)
+    ("e2e-npm-nodemod-only", 1, "keyv"),
     ("e2e-python", 1, "litellm"),
     ("e2e-clean", 0, "スキャン対象ファイル数: 2"),
 ]

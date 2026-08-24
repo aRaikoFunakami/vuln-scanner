@@ -175,6 +175,76 @@ def test_semver_ranges_never_assert_safe():
     assert judge("@crawlee/core", "3.17.1-beta.80")[0] == VULNERABLE
 
 
+def test_disk_scan_three_layouts():
+    """CLAUDE.md レビュー観点2 (#10): disk scanning must find installed
+    packages in all three node_modules layouts -- npm hoist, pnpm store
+    (.pnpm/), and nested (non-hoisted) node_modules."""
+    from vuln_scanner.local_scanner import scan_local
+
+    cases = [
+        ("disk-npm-hoist", "keyv", "6.0.0"),
+        ("disk-pnpm-store", "keyv", "6.0.0"),
+        ("disk-nested", "plain-crypto-js", "1.0.0"),
+    ]
+    for fixture_name, pkg, ver in cases:
+        findings, _files, _installed = scan_local(_fixture(fixture_name), None)
+        hits = [
+            f for f in findings
+            if f["package"] == pkg and f["verdict"] == VULNERABLE
+        ]
+        assert hits, (fixture_name, pkg, findings)
+        assert any(f["version"] == ver for f in hits), (fixture_name, findings)
+
+
+def test_disk_scan_no_false_positive_from_subtree():
+    """Regression guard: matching must be bound to real node_modules
+    boundaries. A decoy directory inside a package's own subtree
+    (e.g. a shipped test fixture) that happens to share a target
+    package's name must not be reported as an installed copy."""
+    import json
+    import tempfile
+
+    from vuln_scanner.threats.ecosystems.npm import _walk_installed_versions
+
+    with tempfile.TemporaryDirectory() as root:
+        real = os.path.join(root, "node_modules", "keyv")
+        os.makedirs(real)
+        with open(os.path.join(real, "package.json"), "w") as f:
+            json.dump({"name": "keyv", "version": "6.0.0"}, f)
+        decoy = os.path.join(real, "test", "keyv")
+        os.makedirs(decoy)
+        with open(os.path.join(decoy, "package.json"), "w") as f:
+            json.dump({"name": "keyv", "version": "9.9.9-decoy"}, f)
+        result = _walk_installed_versions(root, {"keyv"})
+    assert result == {"keyv": ["6.0.0"]}, result
+
+
+def test_enrich_findings_handles_multi_version_installed():
+    """Regression guard: enrich_findings' node_modules fallback must not
+    crash when check_installed reports multiple on-disk versions of one
+    package (issue #10 follow-up) -- a package.json dependency with no
+    matching lockfile entry, resolved only from node_modules."""
+    import json
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as root:
+        with open(os.path.join(root, "package.json"), "w") as f:
+            json.dump(
+                {"name": "x", "version": "1.0.0",
+                 "dependencies": {"keyv": "^6.0.0"}}, f,
+            )
+        nm = os.path.join(root, "node_modules", "keyv")
+        os.makedirs(nm)
+        with open(os.path.join(nm, "package.json"), "w") as f:
+            json.dump({"name": "keyv", "version": "6.0.0"}, f)
+        from vuln_scanner.local_scanner import scan_local
+        findings, _files, _installed = scan_local(root, None)
+
+    keyv_hits = [f for f in findings if f["package"] == "keyv"]
+    assert keyv_hits, findings
+    assert any(f["verdict"] == VULNERABLE for f in keyv_hits), findings
+
+
 def test_judge_worst_verdict_wins():
     """judge() must consult ALL owning threats (worst verdict wins) and
     honor the ecosystem filter -- npm and PyPI names collide."""
@@ -292,6 +362,9 @@ def main():
     test_enrich_does_not_flip_verdicts()
     test_enrich_most_severe_lock_version()
     test_semver_ranges_never_assert_safe()
+    test_disk_scan_three_layouts()
+    test_disk_scan_no_false_positive_from_subtree()
+    test_enrich_findings_handles_multi_version_installed()
     test_judge_worst_verdict_wins()
 
     print("OK")

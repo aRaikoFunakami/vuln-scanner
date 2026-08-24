@@ -180,9 +180,14 @@ def generate_markdown(findings, total_repos, total_files, scanned_repos, output_
                 lines.append("")
                 lines.append("| パッケージ名 | インストール済みバージョン | 判定 |")
                 lines.append("|------------|----------------------|------|")
-                for pkg, ver in env["packages"].items():
-                    verdict, _ = judge(pkg, ver)
-                    lines.append(f"| {pkg} | {ver} | {verdict} |")
+                for pkg, ver_or_vers in env["packages"].items():
+                    # npm: a package can have several on-disk copies
+                    versions = (
+                        ver_or_vers if isinstance(ver_or_vers, list) else [ver_or_vers]
+                    )
+                    for ver in versions:
+                        verdict, _ = judge(pkg, ver)
+                        lines.append(f"| {pkg} | {ver} | {verdict} |")
                 lines.append("")
 
     # Scanned repo list
