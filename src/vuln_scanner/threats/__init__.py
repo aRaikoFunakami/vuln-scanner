@@ -152,16 +152,55 @@ _ECOSYSTEM_MODULES = {
     "npm": _npm_eco,
 }
 
+def _validate_entry(entry, index: int) -> None:
+    """Fail fast with a message naming the offending entry if a threat is
+    missing a field detection requires (issue #30).
+
+    Only fields that break parsing/judgment are enforced here. Report
+    prose (``report.*``) is optional and degrades to empty sections --
+    see ``DataDrivenThreat._report`` -- so it is intentionally not
+    required, to avoid refusing to load over a cosmetic omission.
+    """
+    where = f"threats.json entry #{index}"
+    if not isinstance(entry, dict):
+        raise ValueError(f"{where}: must be a JSON object, got {type(entry).__name__}")
+    name = entry.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"{where}: missing or empty required field 'name'")
+    where = f"threats.json threat {name!r}"
+    eco = entry.get("ecosystem")
+    if eco not in _ECOSYSTEM_MODULES:
+        raise ValueError(
+            f"{where}: unknown or missing 'ecosystem' {eco!r}. "
+            f"Available: {list(_ECOSYSTEM_MODULES)}"
+        )
+    direct = entry.get("direct_packages")
+    if not isinstance(direct, dict) or not direct:
+        raise ValueError(
+            f"{where}: 'direct_packages' must be a non-empty object "
+            "(malicious-only threats are not currently supported)"
+        )
+    for pkg, versions in direct.items():
+        if not isinstance(versions, list):
+            raise ValueError(
+                f"{where}: direct_packages[{pkg!r}] must be a list of "
+                f"version strings, got {type(versions).__name__}"
+            )
+        # Elements must be strings: a bare JSON number (1.14 instead of
+        # "1.14") or null would otherwise pass here and crash
+        # canonical_version() with an un-named AttributeError at import.
+        for v in versions:
+            if not isinstance(v, str):
+                raise ValueError(
+                    f"{where}: direct_packages[{pkg!r}] contains a non-string "
+                    f"version {v!r} ({type(v).__name__}); quote it in threats.json"
+                )
+
+
 _DB_PATH = os.path.join(os.path.dirname(__file__), "threats.json")
 with open(_DB_PATH, encoding="utf-8") as _f:
     _DB = json.load(_f)
 
-for _entry in _DB:
-    _eco_mod = _ECOSYSTEM_MODULES.get(_entry["ecosystem"])
-    if _eco_mod is None:
-        raise ValueError(
-            f"Unknown ecosystem {_entry['ecosystem']!r} in threats.json "
-            f"(threat: {_entry['name']!r}). "
-            f"Available: {list(_ECOSYSTEM_MODULES)}"
-        )
-    register(DataDrivenThreat(_entry, _eco_mod))
+for _index, _entry in enumerate(_DB):
+    _validate_entry(_entry, _index)
+    register(DataDrivenThreat(_entry, _ECOSYSTEM_MODULES[_entry["ecosystem"]]))
