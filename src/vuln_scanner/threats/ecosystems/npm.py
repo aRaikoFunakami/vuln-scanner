@@ -35,21 +35,6 @@ FILE_PATTERNS_REGEX: List[re.Pattern[str]] = [
 # ── Parser helpers ───────────────────────────────────────────────────────────
 
 
-def _extract_semver(version_str: Optional[str]) -> Optional[str]:
-    """Extract the semver portion from an npm version specifier.
-
-    Examples::
-
-        "^1.14.0" -> "1.14.0"
-        "~0.30.4" -> "0.30.4"
-        "1.14.1"  -> "1.14.1"
-    """
-    if not version_str:
-        return None
-    m = re.search(r"(\d+\.\d+\.\d+)", version_str)
-    return m.group(1) if m else None
-
-
 def parse_package_json(
     content: str,
     target_packages: Set[str],
@@ -77,7 +62,15 @@ def parse_package_json(
             continue
         for pkg_name, ver_spec in deps.items():
             if pkg_name.lower() in target_packages:
-                ver = _extract_semver(ver_spec) if isinstance(ver_spec, str) else None
+                # Keep the raw specifier: "^1.14.0" is a RANGE, not the
+                # pinned version 1.14.0 -- stripping the operator made
+                # judge() assert SAFE for ranges that resolve to
+                # vulnerable versions (issue #9)
+                ver = (
+                    ver_spec.strip()
+                    if isinstance(ver_spec, str) and ver_spec.strip()
+                    else None
+                )
                 results.append((pkg_name.lower(), ver))
     return results
 

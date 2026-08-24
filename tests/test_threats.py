@@ -125,6 +125,56 @@ def test_enrich_most_severe_lock_version():
     assert findings[0]["verdict"] == VULNERABLE, findings[0]
 
 
+def test_semver_ranges_never_assert_safe():
+    """CLAUDE.md レビュー観点4 (#9): a range specifier must never be
+    judged SAFE when it can resolve to a vulnerable version, and parsers
+    must not strip range operators."""
+    from vuln_scanner.threats.ecosystems.npm import parse_package_json
+    from vuln_scanner.threats.ecosystems.python import parse_requirements_txt
+
+    # Parsers keep the raw specifier
+    pkg_json = '{"dependencies": {"axios": "^1.14.0"}}'
+    assert parse_package_json(pkg_json, {"axios"}) == [("axios", "^1.14.0")]
+    assert parse_requirements_txt("litellm>=1.82.0\n", {"litellm"}) == [
+        ("litellm", ">=1.82.0")
+    ]
+    assert parse_requirements_txt("litellm==1.82.7\n", {"litellm"}) == [
+        ("litellm", "1.82.7")
+    ]
+
+    # Ranges that can reach a vulnerable version -> WARNING, never SAFE
+    # (axios vulnerable: 1.14.1, 0.30.4; litellm vulnerable: 1.82.7/8)
+    assert judge("axios", "^1.14.0")[0] == WARNING
+    assert judge("axios", "~1.14.0")[0] == WARNING
+    assert judge("axios", ">=1.0.0")[0] == WARNING
+    assert judge("axios", "^0.30.0")[0] == WARNING
+    assert judge("axios", "*")[0] == WARNING
+    assert judge("litellm", ">=1.82.0")[0] == WARNING
+    assert judge("litellm", "~=1.82.0")[0] == WARNING
+
+    # Ranges that cannot reach any vulnerable version -> SAFE (range form)
+    assert judge("keyv", "^4.0.0")[0] == SAFE  # keyv vulnerable: 6.0.0
+    assert judge("axios", "^2.0.0")[0] == SAFE
+    assert judge("axios", "<0.30.0")[0] == SAFE
+
+    # Exact pins keep exact semantics (incl. prerelease and PEP508 ==)
+    assert judge("axios", "1.14.0")[0] == SAFE
+    assert judge("axios", "1.14.1")[0] == VULNERABLE
+    assert judge("litellm", "==1.82.7")[0] == VULNERABLE
+
+    # "v" prefix is an exact pin, not a range -- must not fall through to
+    # is_exact_version's SAFE branch without normalizing against the
+    # bare version stored in threats.json (regression: was falsely SAFE)
+    assert judge("axios", "v1.14.1")[0] == VULNERABLE
+    assert judge("axios", "v1.14.0")[0] == SAFE
+    pre = parse_package_json(
+        '{"dependencies": {"@crawlee/core": "3.17.1-beta.80"}}',
+        {"@crawlee/core"},
+    )
+    assert pre == [("@crawlee/core", "3.17.1-beta.80")], pre
+    assert judge("@crawlee/core", "3.17.1-beta.80")[0] == VULNERABLE
+
+
 def test_judge_worst_verdict_wins():
     """judge() must consult ALL owning threats (worst verdict wins) and
     honor the ecosystem filter -- npm and PyPI names collide."""
@@ -241,6 +291,7 @@ def main():
 
     test_enrich_does_not_flip_verdicts()
     test_enrich_most_severe_lock_version()
+    test_semver_ranges_never_assert_safe()
     test_judge_worst_verdict_wins()
 
     print("OK")

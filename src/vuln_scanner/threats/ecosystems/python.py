@@ -57,11 +57,20 @@ def parse_requirements_txt(
         # Remove inline comments
         line = line.split("#")[0].strip()
         m = re.match(
-            r"^([a-zA-Z0-9_-]+)\s*(?:[=~!<>]=?\s*([0-9][0-9a-zA-Z._-]*))?", line
+            r"^([a-zA-Z0-9_-]+)\s*(?:([=~!<>]=?)\s*([0-9][0-9a-zA-Z._-]*))?", line
         )
         if m:
             pkg = m.group(1).lower().replace("-", "_")
-            ver = m.group(2)
+            op, num = m.group(2), m.group(3)
+            # "==" pins an exact version; any other operator is a range
+            # and must keep its operator so judge() does not treat it as
+            # a pinned version (issue #9)
+            if num is None:
+                ver = None
+            elif op == "==":
+                ver = num
+            else:
+                ver = f"{op}{num}"
             if pkg.replace("_", "-") in target_packages or pkg in target_packages:
                 results.append((pkg, ver))
     return results
@@ -71,25 +80,24 @@ def parse_pyproject_toml(
     content: str,
     target_packages: Set[str],
 ) -> List[Tuple[str, Optional[str]]]:
-    """Parse ``pyproject.toml`` for dependencies (simple regex-based)."""
+    """Parse ``pyproject.toml`` for dependencies (simple regex-based).
+
+    Version specifiers are returned RAW (``>=1.82.0``, ``^1.82``): a
+    range must reach ``judge()`` with its operator intact so it is not
+    mistaken for a pinned version (issue #9).
+    """
     results: List[Tuple[str, Optional[str]]] = []
     for pkg in target_packages:
         patterns = [
-            rf'["\']({re.escape(pkg)})\s*(?:[=~!<>]=?\s*([0-9][0-9a-zA-Z._-]*))?["\']',
+            rf'["\']({re.escape(pkg)})\s*([=~!<>^][^"\']*)?["\']',
             rf"^{re.escape(pkg)}\s*=\s*[\"']([^\"']*)[\"']",
             rf"^{re.escape(pkg)}\s*=\s*\{{[^}}]*version\s*=\s*[\"']([^\"']*)[\"']",
         ]
         for pattern in patterns:
             for m in re.finditer(pattern, content, re.MULTILINE | re.IGNORECASE):
                 groups = m.groups()
-                if len(groups) >= 2:
-                    ver = groups[1]
-                else:
-                    ver_str = groups[0] if groups else None
-                    ver_m = re.search(
-                        r"[=~!<>]=?\s*([0-9][0-9a-zA-Z._-]*)", ver_str or ""
-                    )
-                    ver = ver_m.group(1) if ver_m else None
+                spec = groups[1] if len(groups) >= 2 else groups[0]
+                ver = (spec or "").strip() or None
                 results.append((pkg, ver))
     return results
 
@@ -109,11 +117,11 @@ def parse_pipfile(
         for pattern in patterns:
             for m in re.finditer(pattern, content, re.MULTILINE | re.IGNORECASE):
                 groups = m.groups()
+                # Raw specifier ("*", ">=1.82", "==1.82.7") -- judge()
+                # distinguishes pins from ranges (issue #9)
+                ver = None
                 if groups and groups[0]:
-                    ver_m = re.search(r"[0-9][0-9a-zA-Z._-]*", groups[0])
-                    ver = ver_m.group(0) if ver_m else None
-                else:
-                    ver = None
+                    ver = groups[0].strip() or None
                 results.append((pkg, ver))
     return results
 

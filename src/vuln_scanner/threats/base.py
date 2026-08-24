@@ -33,6 +33,84 @@ def most_severe(*results: Tuple[str, str]) -> Tuple[str, str]:
     return max(results, key=lambda r: _VERDICT_SEVERITY.get(r[0], 0))
 
 
+# ── Version-spec helpers ────────────────────────────────────────────────────
+
+_EXACT_VERSION_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$")
+
+_RANGE_RE = re.compile(
+    r"^(\^|~=|~|>=|>|<=|<|==|=)?\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?"
+    r"(?:[-+][0-9A-Za-z.+-]*)?$"
+)
+
+
+def is_exact_version(spec: str) -> bool:
+    """True if *spec* pins one concrete version (``1.2.3``, ``1.2.3-rc.1``)."""
+    return bool(_EXACT_VERSION_RE.match(spec.strip()))
+
+
+def _ver_tuple(v: str) -> Optional[Tuple[int, int, int]]:
+    m = re.match(r"v?(\d+)\.(\d+)(?:\.(\d+))?", v.strip())
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+
+
+def range_may_include(spec: str, versions: Set[str]) -> bool:
+    """Can version range *spec* resolve to any version in *versions*?
+
+    Supports the common single-operator forms: npm ``^`` ``~``,
+    ``>=`` ``>`` ``<=`` ``<``, PEP 440 ``~=``, and bare/partial pins.
+    Anything unrecognized or compound (``||``, hyphen ranges, ``*``)
+    is conservatively treated as "may include" -- a range must never be
+    declared safe on a guess.  Prerelease tags are ignored for the
+    comparison (also conservative).
+    """
+    spec = spec.strip()
+    vulns = [t for t in (_ver_tuple(v) for v in versions) if t is not None]
+    if not vulns:
+        return False
+    m = _RANGE_RE.match(spec)
+    if not m:
+        return True  # "*", "1.x", "|| ", "1.0 - 2.0", "latest", ...
+    op = m.group(1) or ""
+    major = int(m.group(2))
+    minor = int(m.group(3)) if m.group(3) is not None else None
+    patch = int(m.group(4)) if m.group(4) is not None else None
+    base = (major, minor or 0, patch or 0)
+
+    def hit(v: Tuple[int, int, int]) -> bool:
+        if op == ">=":
+            return v >= base
+        if op == ">":
+            return v > base
+        if op == "<=":
+            return v <= base
+        if op == "<":
+            return v < base
+        if op == "^":
+            if major > 0:
+                return v[0] == major and v >= base
+            if (minor or 0) > 0:
+                return v[0] == 0 and v[1] == minor and v >= base
+            return v == base
+        if op == "~":
+            if minor is None:
+                return v[0] == major
+            return v[0] == major and v[1] == minor and v >= base
+        if op == "~=":
+            if patch is None:
+                return v[0] == major and v >= base
+            return v[0] == major and v[1] == minor and v >= base
+        # "=="/"="/bare partial pin ("1.2"): prefix semantics
+        if minor is None:
+            return v[0] == major
+        if patch is None:
+            return v[0] == major and v[1] == minor
+        return v == base
+
+    return any(hit(v) for v in vulns)
+
+
 class ThreatDefinition(ABC):
     """Base class for a supply-chain threat definition.
 
