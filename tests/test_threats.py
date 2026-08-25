@@ -675,16 +675,16 @@ def test_package_lock_json_scoped_names():
     """Regression guard: scoped package names must survive lockfile
     parsing (package-lock.json v2/v3 strips everything before the last
     "/" naively if not handled)."""
-    targets = {"@arv-bedrock/auth", "keyv"}
+    targets = {"@vsfixture/authlib", "vsfixture-cache"}
     lock_json = (
         '{"packages": {'
-        '"node_modules/@arv-bedrock/auth": {"version": "1.1.7"}, '
-        '"node_modules/keyv": {"version": "6.0.0"}'
+        '"node_modules/@vsfixture/authlib": {"version": "1.1.7"}, '
+        '"node_modules/vsfixture-cache": {"version": "6.0.0"}'
         "}}"
     )
     assert set(parse_package_lock_json(lock_json, targets)) == {
-        ("@arv-bedrock/auth", "1.1.7"),
-        ("keyv", "6.0.0"),
+        ("@vsfixture/authlib", "1.1.7"),
+        ("vsfixture-cache", "6.0.0"),
     }
 
 
@@ -787,48 +787,27 @@ def _threats_registered(*threats):
         yield
     finally:
         threats_mod._THREATS[:] = saved
+        for t in threats:
+            threats_mod._OWNED_NORMALIZED.pop(id(t), None)
 
 
 def _dummy_fixture_threats():
-    """DataDrivenThreat instances mirroring keyv/axios/litellm's shapes,
-    matching the DUMMY identifiers baked into tests/fixtures/ (see
-    fixtures/dummy_threats.json, used by test_cli.py's subprocess runs).
-    Built directly rather than loaded from JSON so in-process tests can
-    register/unregister them around a single assertion."""
-    from vuln_scanner.threats.data_driven import DataDrivenThreat
-    from vuln_scanner.threats.ecosystems import npm as npm_eco
-    from vuln_scanner.threats.ecosystems import python as py_eco
+    """DataDrivenThreat instances loaded from fixtures/dummy_threats.json
+    -- the single source of truth for the dummy identifiers baked into
+    tests/fixtures/ (also used directly by test_cli.py's subprocess runs
+    via VULN_SCANNER_THREATS_JSON). Loaded here rather than duplicated as
+    a Python literal so in-process and subprocess tests can never drift
+    out of sync with each other."""
+    import json as _json
 
+    import vuln_scanner.threats as threats_mod
+    from vuln_scanner.threats.data_driven import DataDrivenThreat
+
+    with open(_fixture("dummy_threats.json"), encoding="utf-8") as f:
+        entries = _json.load(f)
     return [
-        DataDrivenThreat(
-            {
-                "name": "vsfixture-worm",
-                "ecosystem": "npm",
-                "direct_packages": {
-                    "vsfixture-cache": ["6.0.0"],
-                    "@vsfixture/authlib": ["1.1.7"],
-                },
-            },
-            npm_eco,
-        ),
-        DataDrivenThreat(
-            {
-                "name": "vsfixture-supplychain",
-                "ecosystem": "npm",
-                "direct_packages": {"vsfixture-hostpkg": ["1.0.0"]},
-                "malicious_packages": ["vsfixture-malware-dropper"],
-                "malicious_dirs": ["vsfixture-malware-dropper"],
-            },
-            npm_eco,
-        ),
-        DataDrivenThreat(
-            {
-                "name": "vsfixture-pylib",
-                "ecosystem": "python",
-                "direct_packages": {"vsfixture-llmclient": ["1.82.7", "1.82.8"]},
-            },
-            py_eco,
-        ),
+        DataDrivenThreat(entry, threats_mod._ECOSYSTEM_MODULES[entry["ecosystem"]])
+        for entry in entries
     ]
 
 
@@ -859,20 +838,25 @@ def test_persisted_fixtures_inert_without_injected_threats_but_detected_with_the
         )
 
     # 2. With matching dummy threats registered, detection still works.
+    # e2e-yarn's yarn.lock also carries the scoped @vsfixture/authlib
+    # entry (mirroring the real keyv worm's mass-scoped-package shape) --
+    # asserted too so a scoped-name lockfile-parsing regression can't
+    # hide behind the unscoped vsfixture-cache check alone.
     expect_vulnerable = {
-        "e2e-npm": "vsfixture-cache",
-        "e2e-yarn": "vsfixture-cache",
-        "e2e-npm-nodemod-only": "vsfixture-cache",
-        "e2e-python": "vsfixture_llmclient",  # PEP 503 normalized
-        "disk-npm-hoist": "vsfixture-cache",
-        "disk-pnpm-store": "vsfixture-cache",
-        "disk-nested": "vsfixture-malware-dropper",
+        "e2e-npm": ["vsfixture-cache"],
+        "e2e-yarn": ["vsfixture-cache", "@vsfixture/authlib"],
+        "e2e-npm-nodemod-only": ["vsfixture-cache"],
+        "e2e-python": ["vsfixture_llmclient"],  # PEP 503 normalized
+        "disk-npm-hoist": ["vsfixture-cache"],
+        "disk-pnpm-store": ["vsfixture-cache"],
+        "disk-nested": ["vsfixture-malware-dropper"],
     }
     with _threats_registered(*_dummy_fixture_threats()):
-        for name, pkg in expect_vulnerable.items():
+        for name, pkgs in expect_vulnerable.items():
             findings, _n, _i = scan_local(_fixture(name), None)
-            hits = [f for f in findings if f["verdict"] == VULNERABLE]
-            assert any(f["package"] == pkg for f in hits), (name, findings)
+            hit_pkgs = {f["package"] for f in findings if f["verdict"] == VULNERABLE}
+            for pkg in pkgs:
+                assert pkg in hit_pkgs, (name, pkg, findings)
 
 
 def test_single_direct_package_threat():

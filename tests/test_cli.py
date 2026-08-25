@@ -33,6 +33,10 @@ def run_scan(project_dir, threats_json=None):
     )
     if threats_json:
         env["VULN_SCANNER_THREATS_JSON"] = threats_json
+    else:
+        # Never let an ambient/inherited value silently redirect a "real
+        # DB" test to the wrong threats.json.
+        env.pop("VULN_SCANNER_THREATS_JSON", None)
     with tempfile.TemporaryDirectory() as out:
         return subprocess.run(
             [
@@ -94,18 +98,33 @@ def test_persisted_fixtures_inert_against_real_threats_db():
         assert proc.returncode == 0, (name, proc.returncode, proc.stdout[-2000:])
 
 
-def test_real_threats_db_detects_via_full_cli():
+def test_real_threats_db_detects_via_full_cli_python():
     """Sanity check that the REAL production threats.json still works
-    end to end through the full CLI -- using an EPHEMERAL project (never
-    committed to the repo) rather than a persisted fixture, so this
-    repo never carries a real vulnerable-looking package/version on
-    disk (see DUMMY_THREATS_JSON above)."""
+    end to end through the full CLI for the Python ecosystem -- using an
+    EPHEMERAL project (never committed to the repo) rather than a
+    persisted fixture, so this repo never carries a real vulnerable-
+    looking package/version on disk (see DUMMY_THREATS_JSON above)."""
     with tempfile.TemporaryDirectory() as proj:
         with open(os.path.join(proj, "requirements.txt"), "w") as f:
             f.write("litellm==1.82.7\n")
         proc = run_scan(proj)  # no threats_json override -- real DB
     assert proc.returncode == 1, (proc.returncode, proc.stdout[-2000:])
     assert "litellm" in proc.stdout, proc.stdout[-2000:]
+
+
+def test_real_threats_db_detects_via_full_cli_npm():
+    """Same sanity check as above for the npm ecosystem (CLAUDE.md
+    レビュー観点5 requires at least one real-fixture E2E scan per
+    ecosystem): with all persisted fixtures now using dummy identifiers
+    (see DUMMY_THREATS_JSON above), this is the only place the real
+    production threats.json's npm matching is exercised end to end
+    through package.json parsing."""
+    with tempfile.TemporaryDirectory() as proj:
+        with open(os.path.join(proj, "package.json"), "w") as f:
+            f.write('{"name": "x", "dependencies": {"axios": "1.14.1"}}')
+        proc = run_scan(proj)  # no threats_json override -- real DB
+    assert proc.returncode == 1, (proc.returncode, proc.stdout[-2000:])
+    assert "axios" in proc.stdout, proc.stdout[-2000:]
 
 
 def test_host_artifact_does_not_fail_repo_gate():
@@ -145,7 +164,8 @@ def test_host_artifact_does_not_fail_repo_gate():
 def main():
     test_exit_codes()
     test_persisted_fixtures_inert_against_real_threats_db()
-    test_real_threats_db_detects_via_full_cli()
+    test_real_threats_db_detects_via_full_cli_python()
+    test_real_threats_db_detects_via_full_cli_npm()
     test_host_artifact_does_not_fail_repo_gate()
     print("OK")
 
