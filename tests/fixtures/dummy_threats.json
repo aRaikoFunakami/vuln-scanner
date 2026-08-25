@@ -1,0 +1,36 @@
+[
+  {
+    "name": "vsfixture-worm",
+    "ecosystem": "npm",
+    "direct_packages": {
+      "vsfixture-cache": ["6.0.0"],
+      "@vsfixture/authlib": ["1.1.7"]
+    },
+    "indirect_packages": [],
+    "malicious_packages": [],
+    "malicious_dirs": [],
+    "malware_artifacts": {}
+  },
+  {
+    "name": "vsfixture-supplychain",
+    "ecosystem": "npm",
+    "direct_packages": {
+      "vsfixture-hostpkg": ["1.0.0"]
+    },
+    "indirect_packages": [],
+    "malicious_packages": ["vsfixture-malware-dropper"],
+    "malicious_dirs": ["vsfixture-malware-dropper"],
+    "malware_artifacts": {}
+  },
+  {
+    "name": "vsfixture-pylib",
+    "ecosystem": "python",
+    "direct_packages": {
+      "vsfixture-llmclient": ["1.82.7", "1.82.8"]
+    },
+    "indirect_packages": [],
+    "malicious_packages": [],
+    "malicious_dirs": [],
+    "malware_artifacts": {}
+  }
+]

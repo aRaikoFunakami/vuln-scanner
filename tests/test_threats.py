@@ -5,6 +5,7 @@ Guards against the `all_packages` regression where a threat with many
 for parsing/judgment.
 """
 
+import contextlib
 import os
 import sys
 
@@ -33,10 +34,11 @@ def _fixture(name):
     return os.path.join(os.path.dirname(__file__), "fixtures", name)
 
 
-# Real `npm install --package-lock-only` output (npm 11, lockfileVersion 3).
-# The malicious keyv@6.0.0 is unpublished from the registry, so the lock was
-# generated with benign versions and only the version strings / the dummy
-# package name were substituted afterwards (CLAUDE.md レビュー観点1).
+# Real `npm install --package-lock-only` output (npm 11, lockfileVersion 3),
+# with package name/version substituted for a dummy identifier the real
+# threats.json has never heard of (see fixtures/dummy_threats.json) --
+# CLAUDE.md レビュー観点1, and "tests must not carry real vulnerable-
+# looking package/version strings on disk".
 FIXTURE_LOCK = _fixture("package-lock.json")
 
 
@@ -55,10 +57,12 @@ def _make_finding(root, package):
 def test_enrich_does_not_flip_verdicts():
     """Regression guard (#5): appending a threat must not flip verdicts.
 
-    Replays the local_scanner enrich phase with every registered threat
-    plus an unrelated dummy appended LAST (the threats.json-append
-    scenario): the dummy's own judge returns SAFE for out-of-scope
-    packages and used to overwrite the keyv VULNERABLE verdict.
+    Replays the local_scanner enrich phase with a threat matching the
+    fixture's dummy package (simulating a properly registered threat)
+    plus every REAL registered threat plus an unrelated dummy appended
+    LAST (the threats.json-append scenario): the dummy's own judge
+    returns SAFE for out-of-scope packages and used to overwrite the
+    already-VULNERABLE verdict.
     Also pins:
     - a not-yet-registered threat still judges its own packages
     - enrichment is idempotent (a second full pass changes nothing)
@@ -70,6 +74,15 @@ def test_enrich_does_not_flip_verdicts():
     from vuln_scanner.threats.data_driven import DataDrivenThreat
     from vuln_scanner.threats.ecosystems import npm as npm_eco
 
+    # `matching` plays the role the real "keyv" threat played in the
+    # original bug: REGISTERED globally, so registry_judge recognizes it
+    # on every call regardless of iteration order. `dummy` stays
+    # deliberately UNregistered, appended LAST, to pin "a not-yet-
+    # registered threat still judges its own packages" -- enrich_findings
+    # recomputes each finding's verdict fresh via judge_fn on every call
+    # (see _threats_registered's docstring), so an unregistered threat's
+    # win only survives if nothing runs after it for that finding.
+    matching = _dummy_fixture_threats()[0]  # recognizes vsfixture-cache
     dummy = DataDrivenThreat(
         {
             "name": "unrelated-example",
@@ -79,11 +92,11 @@ def test_enrich_does_not_flip_verdicts():
         npm_eco,
     )
 
-    with tempfile.TemporaryDirectory() as root:
+    with _threats_registered(matching), tempfile.TemporaryDirectory() as root:
         lock_path = os.path.join(root, "package-lock.json")
         shutil.copy(FIXTURE_LOCK, lock_path)
         findings = [
-            _make_finding(root, "keyv"),
+            _make_finding(root, "vsfixture-cache"),
             _make_finding(root, "vuln-scanner-selftest-pkg"),
         ]
         threat_order = list(get_all_threats()) + [dummy]
@@ -94,9 +107,9 @@ def test_enrich_does_not_flip_verdicts():
             threat.enrich_findings(findings, [], [lock_path], root)
         assert findings == snapshot, "enrich must be idempotent"
 
-    keyv_f, selftest_f = findings
-    assert keyv_f["version"] == "6.0.0", keyv_f
-    assert keyv_f["verdict"] == VULNERABLE, keyv_f
+    cache_f, selftest_f = findings
+    assert cache_f["version"] == "6.0.0", cache_f
+    assert cache_f["verdict"] == VULNERABLE, cache_f
     # The unregistered dummy must still judge its own package
     assert selftest_f["version"] == "4.99.99", selftest_f
     assert selftest_f["verdict"] == VULNERABLE, selftest_f
@@ -109,20 +122,21 @@ def test_enrich_most_severe_lock_version():
     import json
     import tempfile
 
-    with tempfile.TemporaryDirectory() as root:
+    with _threats_registered(_dummy_fixture_threats()[0]), \
+            tempfile.TemporaryDirectory() as root:
         lock_path = os.path.join(root, "package-lock.json")
         with open(FIXTURE_LOCK) as f:
             lock = json.load(f)
-        # Inject a nested (transitive) SAFE keyv using the entry shape npm
+        # Inject a nested (transitive) SAFE copy using the entry shape npm
         # emits; sorted keys put it before the vulnerable one, which the
         # old first-wins pick would have reported.
-        lock["packages"]["node_modules/a-pkg/node_modules/keyv"] = dict(
-            lock["packages"]["node_modules/keyv"], version="5.0.0"
+        lock["packages"]["node_modules/a-pkg/node_modules/vsfixture-cache"] = dict(
+            lock["packages"]["node_modules/vsfixture-cache"], version="5.0.0"
         )
         lock["packages"] = dict(sorted(lock["packages"].items()))
         with open(lock_path, "w") as f:
             json.dump(lock, f)
-        findings = [_make_finding(root, "keyv")]
+        findings = [_make_finding(root, "vsfixture-cache")]
         for threat in get_all_threats():
             threat.enrich_findings(findings, [], [lock_path], root)
 
@@ -273,22 +287,28 @@ def test_python_parsers_preserve_range_operators():
 def test_disk_scan_three_layouts():
     """CLAUDE.md レビュー観点2 (#10): disk scanning must find installed
     packages in all three node_modules layouts -- npm hoist, pnpm store
-    (.pnpm/), and nested (non-hoisted) node_modules."""
+    (.pnpm/), and nested (non-hoisted) node_modules.
+
+    Registers the dummy threats matching these fixtures' identifiers
+    (see fixtures/dummy_threats.json) since the persisted fixtures are
+    deliberately inert against the real production DB (they carry no
+    genuinely vulnerable-looking package/version strings)."""
     from vuln_scanner.local_scanner import scan_local
 
     cases = [
-        ("disk-npm-hoist", "keyv", "6.0.0"),
-        ("disk-pnpm-store", "keyv", "6.0.0"),
-        ("disk-nested", "plain-crypto-js", "1.0.0"),
+        ("disk-npm-hoist", "vsfixture-cache", "6.0.0"),
+        ("disk-pnpm-store", "vsfixture-cache", "6.0.0"),
+        ("disk-nested", "vsfixture-malware-dropper", "1.0.0"),
     ]
-    for fixture_name, pkg, ver in cases:
-        findings, _files, _installed = scan_local(_fixture(fixture_name), None)
-        hits = [
-            f for f in findings
-            if f["package"] == pkg and f["verdict"] == VULNERABLE
-        ]
-        assert hits, (fixture_name, pkg, findings)
-        assert any(f["version"] == ver for f in hits), (fixture_name, findings)
+    with _threats_registered(*_dummy_fixture_threats()):
+        for fixture_name, pkg, ver in cases:
+            findings, _files, _installed = scan_local(_fixture(fixture_name), None)
+            hits = [
+                f for f in findings
+                if f["package"] == pkg and f["verdict"] == VULNERABLE
+            ]
+            assert hits, (fixture_name, pkg, findings)
+            assert any(f["version"] == ver for f in hits), (fixture_name, findings)
 
 
 def test_disk_scan_no_false_positive_from_subtree():
@@ -655,26 +675,26 @@ def test_package_lock_json_scoped_names():
     """Regression guard: scoped package names must survive lockfile
     parsing (package-lock.json v2/v3 strips everything before the last
     "/" naively if not handled)."""
-    targets = {"@arv-bedrock/auth", "keyv"}
+    targets = {"@vsfixture/authlib", "vsfixture-cache"}
     lock_json = (
         '{"packages": {'
-        '"node_modules/@arv-bedrock/auth": {"version": "1.1.7"}, '
-        '"node_modules/keyv": {"version": "6.0.0"}'
+        '"node_modules/@vsfixture/authlib": {"version": "1.1.7"}, '
+        '"node_modules/vsfixture-cache": {"version": "6.0.0"}'
         "}}"
     )
     assert set(parse_package_lock_json(lock_json, targets)) == {
-        ("@arv-bedrock/auth", "1.1.7"),
-        ("keyv", "6.0.0"),
+        ("@vsfixture/authlib", "1.1.7"),
+        ("vsfixture-cache", "6.0.0"),
     }
 
 
 # Shared expected result for the pnpm/yarn all-generations tests below:
 # both lockfile families resolve the same four packages to the same
 # versions once scoped/quoted/peer-suffix handling is correct.
-_LOCK_TARGETS = {"@arv-bedrock/auth", "keyv", "react", "use-sync-external-store"}
+_LOCK_TARGETS = {"@vsfixture/authlib", "vsfixture-cache", "react", "use-sync-external-store"}
 _LOCK_EXPECTED = [
-    ("@arv-bedrock/auth", "1.1.7"),
-    ("keyv", "6.0.0"),
+    ("@vsfixture/authlib", "1.1.7"),
+    ("vsfixture-cache", "6.0.0"),
     ("react", "18.3.1"),
     ("use-sync-external-store", "1.2.2"),
 ]
@@ -704,11 +724,11 @@ def test_pnpm_lock_all_generations():
     # does-not-detect probe, not lockfile fixture data.)
     not_installed = (
         "overrides:\n"
-        "  keyv@6.0.0: ^7.0.0\n"
+        "  vsfixture-cache@6.0.0: ^7.0.0\n"
         "snapshots:\n"
-        "  keyv@6.0.0:\n"
+        "  vsfixture-cache@6.0.0:\n"
     )
-    assert parse_pnpm_lock(not_installed, {"keyv"}) == []
+    assert parse_pnpm_lock(not_installed, {"vsfixture-cache"}) == []
 
     # Dotted package names (threats.json lists e.g. hamus.js) must parse
     assert parse_pnpm_lock(
@@ -750,6 +770,95 @@ def test_yarn_lock_all_generations():
     ]
 
 
+@contextlib.contextmanager
+def _threats_registered(*threats):
+    """Temporarily register *threats* into the global registry (as if
+    they were production entries in threats.json), restoring the
+    previous registry on exit. Needed because ``enrich_findings``
+    recomputes each finding's verdict from ``registry_judge`` (the
+    global registry) fresh on every call -- an UNregistered threat only
+    "wins" a finding for the duration of its own call, not after."""
+    import vuln_scanner.threats as threats_mod
+
+    saved = list(threats_mod._THREATS)
+    for t in threats:
+        threats_mod.register(t)
+    try:
+        yield
+    finally:
+        threats_mod._THREATS[:] = saved
+        for t in threats:
+            threats_mod._OWNED_NORMALIZED.pop(id(t), None)
+
+
+def _dummy_fixture_threats():
+    """DataDrivenThreat instances loaded from fixtures/dummy_threats.json
+    -- the single source of truth for the dummy identifiers baked into
+    tests/fixtures/ (also used directly by test_cli.py's subprocess runs
+    via VULN_SCANNER_THREATS_JSON). Loaded here rather than duplicated as
+    a Python literal so in-process and subprocess tests can never drift
+    out of sync with each other."""
+    import json as _json
+
+    import vuln_scanner.threats as threats_mod
+    from vuln_scanner.threats.data_driven import DataDrivenThreat
+
+    with open(_fixture("dummy_threats.json"), encoding="utf-8") as f:
+        entries = _json.load(f)
+    return [
+        DataDrivenThreat(entry, threats_mod._ECOSYSTEM_MODULES[entry["ecosystem"]])
+        for entry in entries
+    ]
+
+
+def test_persisted_fixtures_inert_without_injected_threats_but_detected_with_them():
+    """Regression guard: this repo's own tests/fixtures/ (npm hoist/pnpm
+    store/nested node_modules layouts, the malicious-dir sample) must be
+    INERT against the REAL production threats.json -- their package
+    identifiers are dummies the real DB has never heard of. A real
+    `--local` scan of a directory that happens to contain this checkout
+    (e.g. `--local ~/GitHub`) must therefore never flag them, with no
+    exclusion/allowlist mechanism required.
+
+    The SAME fixtures must still be correctly detected once matching
+    dummy threats are registered -- proving detection logic (not just
+    "nothing matches") still works across every on-disk layout."""
+    from vuln_scanner.local_scanner import scan_local
+
+    fixture_dirs = [
+        "e2e-npm", "e2e-yarn", "e2e-npm-nodemod-only", "e2e-python",
+        "disk-npm-hoist", "disk-pnpm-store", "disk-nested",
+    ]
+
+    # 1. Real DB only: nothing in these fixtures is recognized.
+    for name in fixture_dirs:
+        findings, _n, _i = scan_local(_fixture(name), None)
+        assert not any(f["verdict"] == VULNERABLE for f in findings), (
+            name, findings,
+        )
+
+    # 2. With matching dummy threats registered, detection still works.
+    # e2e-yarn's yarn.lock also carries the scoped @vsfixture/authlib
+    # entry (mirroring the real keyv worm's mass-scoped-package shape) --
+    # asserted too so a scoped-name lockfile-parsing regression can't
+    # hide behind the unscoped vsfixture-cache check alone.
+    expect_vulnerable = {
+        "e2e-npm": ["vsfixture-cache"],
+        "e2e-yarn": ["vsfixture-cache", "@vsfixture/authlib"],
+        "e2e-npm-nodemod-only": ["vsfixture-cache"],
+        "e2e-python": ["vsfixture_llmclient"],  # PEP 503 normalized
+        "disk-npm-hoist": ["vsfixture-cache"],
+        "disk-pnpm-store": ["vsfixture-cache"],
+        "disk-nested": ["vsfixture-malware-dropper"],
+    }
+    with _threats_registered(*_dummy_fixture_threats()):
+        for name, pkgs in expect_vulnerable.items():
+            findings, _n, _i = scan_local(_fixture(name), None)
+            hit_pkgs = {f["package"] for f in findings if f["verdict"] == VULNERABLE}
+            for pkg in pkgs:
+                assert pkg in hit_pkgs, (name, pkg, findings)
+
+
 def test_single_direct_package_threat():
     """Regression guard: single direct_package threats (as opposed to
     keyv's 394-package mass worm) still work end to end."""
@@ -766,6 +875,7 @@ def main():
     test_pnpm_lock_all_generations()
     test_yarn_lock_all_generations()
     test_single_direct_package_threat()
+    test_persisted_fixtures_inert_without_injected_threats_but_detected_with_them()
     test_enrich_does_not_flip_verdicts()
     test_enrich_most_severe_lock_version()
     test_semver_ranges_never_assert_safe()

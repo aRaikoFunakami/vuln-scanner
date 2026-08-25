@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from vuln_scanner.threats.base import (  # noqa: F401 – re-export
@@ -197,7 +198,25 @@ def _validate_entry(entry, index: int) -> None:
                 )
 
 
-_DB_PATH = os.path.join(os.path.dirname(__file__), "threats.json")
+# Test-only seam: lets the test suite load a throwaway threat DB (dummy
+# package identifiers that don't collide with anything real) instead of
+# the production one, so it can exercise full detection without ever
+# committing genuinely-vulnerable-looking package/version strings to the
+# repo. Production runs never set this -- but nothing enforces that, so
+# a stray/inherited env var must never silently swap out the real DB: a
+# scanner that can be blinded without a trace is worse than one that
+# isn't run at all. Always warn loudly to stderr when it's active,
+# regardless of --output-dir/logging setup (this runs before either
+# exists).
+_DB_PATH_OVERRIDE = os.environ.get("VULN_SCANNER_THREATS_JSON")
+if _DB_PATH_OVERRIDE:
+    print(
+        f"[vuln-scanner] 警告: VULN_SCANNER_THREATS_JSON が設定されているため "
+        f"本番の脅威DBではなく {_DB_PATH_OVERRIDE!r} を読み込みます"
+        "（テスト専用。本番実行でこれが出た場合は環境変数の設定ミスです）",
+        file=sys.stderr,
+    )
+_DB_PATH = _DB_PATH_OVERRIDE or os.path.join(os.path.dirname(__file__), "threats.json")
 with open(_DB_PATH, encoding="utf-8") as _f:
     _DB = json.load(_f)
 
