@@ -1,1 +1,1 @@
-{"name":"e2e-yarn","version":"1.0.0","dependencies":{"keyv":"^4.0.0"}}
+{"name":"e2e-yarn","version":"1.0.0","dependencies":{"vsfixture-cache":"^4.0.0"}}

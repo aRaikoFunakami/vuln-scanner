@@ -2,9 +2,9 @@
 # yarn lockfile v1
 
 
-"@arv-bedrock/auth@1.1.7":
+"@vsfixture/authlib@1.1.7":
   version "1.1.7"
-  resolved "https://registry.yarnpkg.com/@arv-bedrock/auth/-/auth-1.1.7.tgz#0c01dd3a3483882af7cf3878d4e71d505c81fc4a"
+  resolved "https://registry.yarnpkg.com/@vsfixture/authlib/-/auth-1.1.7.tgz#0c01dd3a3483882af7cf3878d4e71d505c81fc4a"
   integrity sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==
 
 "js-tokens@^3.0.0 || ^4.0.0":
@@ -17,9 +17,9 @@ json-buffer@3.0.1:
   resolved "https://registry.yarnpkg.com/json-buffer/-/json-buffer-3.0.1.tgz#9338802a30d3b6605fbe0613e094008ca8c05a13"
   integrity sha512-4bV5BfR2mqfQTJm+V5tPPdf+ZpuhiIvTuAB5g8kcrXOZpTT/QwwVRWBywX1ozr6lEuPdbHxwaJlm9G6mI2sfSQ==
 
-keyv@6.0.0:
+vsfixture-cache@6.0.0:
   version "6.0.0"
-  resolved "https://registry.yarnpkg.com/keyv/-/keyv-6.0.0.tgz#a879a99e29452f942439f2a405e3af8b31d4de93"
+  resolved "https://registry.yarnpkg.com/vsfixture-cache/-/vsfixture-cache-6.0.0.tgz#a879a99e29452f942439f2a405e3af8b31d4de93"
   integrity sha512-oxVHkHR/EJf2CNXnWxRLW6mg7JyCCUcG0DtEGmL2ctUo1PNTin1PUil+r/+4r5MpVgC/fn1kjsx7mjSujKqIpw==
   dependencies:
     json-buffer "3.0.1"

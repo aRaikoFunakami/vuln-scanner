@@ -197,7 +197,14 @@ def _validate_entry(entry, index: int) -> None:
                 )
 
 
-_DB_PATH = os.path.join(os.path.dirname(__file__), "threats.json")
+# Test-only seam: lets the test suite load a throwaway threat DB (dummy
+# package identifiers that don't collide with anything real) instead of
+# the production one, so it can exercise full detection without ever
+# committing genuinely-vulnerable-looking package/version strings to the
+# repo. Production runs never set this.
+_DB_PATH = os.environ.get("VULN_SCANNER_THREATS_JSON") or os.path.join(
+    os.path.dirname(__file__), "threats.json"
+)
 with open(_DB_PATH, encoding="utf-8") as _f:
     _DB = json.load(_f)
 

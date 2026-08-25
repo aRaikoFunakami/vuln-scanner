@@ -1,1 +1,1 @@
-litellm==1.82.7
+vsfixture-llmclient==1.82.7

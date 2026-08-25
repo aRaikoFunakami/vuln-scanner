@@ -16,12 +16,23 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 FIXTURES = os.path.join(HERE, "fixtures")
 
+# Structural E2E fixtures (lockfile formats, npm hoist/pnpm-store/nested
+# node_modules layouts, corrupted JSON) use DUMMY package identifiers --
+# see fixtures/dummy_threats.json -- so this repo never carries genuinely
+# vulnerable-looking package/version strings on disk. A scan of a
+# directory that merely CONTAINS this checkout (e.g. `--local ~/GitHub`)
+# is therefore inert against them by construction, with no exclusion
+# mechanism needed: they simply don't match the real threats.json.
+DUMMY_THREATS_JSON = os.path.join(FIXTURES, "dummy_threats.json")
 
-def run_scan(project_dir):
+
+def run_scan(project_dir, threats_json=None):
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
         p for p in [os.path.join(ROOT, "src"), env.get("PYTHONPATH")] if p
     )
+    if threats_json:
+        env["VULN_SCANNER_THREATS_JSON"] = threats_json
     with tempfile.TemporaryDirectory() as out:
         return subprocess.run(
             [
@@ -42,13 +53,15 @@ def run_scan(project_dir):
 #   freeze of the running interpreter that has a vulnerable target
 #   installed still would, which is the scanner working.
 CASES = [
-    ("e2e-npm", 1, "keyv"),
-    ("e2e-yarn", 1, "keyv"),
+    ("e2e-npm", 1, "vsfixture-cache"),
+    ("e2e-yarn", 1, "vsfixture-cache"),
     # package.json declares the vulnerable range with no lockfile pin --
     # detected only via the node_modules disk scan (issue #10 follow-up:
     # this exact combination used to crash enrich_findings)
-    ("e2e-npm-nodemod-only", 1, "keyv"),
-    ("e2e-python", 1, "litellm"),
+    ("e2e-npm-nodemod-only", 1, "vsfixture-cache"),
+    # Python package names are PEP 503-normalized (hyphen -> underscore)
+    # in output, so match on the stable substring.
+    ("e2e-python", 1, "llmclient"),
     ("e2e-clean", 0, "スキャン対象ファイル数: 2"),
     # corrupted package.json: no VULNERABLE finding possible, so exit 3
     # ("not analyzed") must fire -- not the exit 0 "clean" a silently
@@ -59,11 +72,40 @@ CASES = [
 
 def test_exit_codes():
     for name, expected, marker in CASES:
-        proc = run_scan(os.path.join(FIXTURES, name))
+        proc = run_scan(os.path.join(FIXTURES, name), threats_json=DUMMY_THREATS_JSON)
         assert proc.returncode == expected, (
             name, proc.returncode, proc.stdout[-2000:], proc.stderr[-500:],
         )
         assert marker in proc.stdout, (name, marker, proc.stdout[-2000:])
+
+
+def test_persisted_fixtures_inert_against_real_threats_db():
+    """Regression guard: this repo's own tests/fixtures/ (used by
+    test_exit_codes above) must be INERT against the REAL production
+    threats.json -- their package identifiers are dummies the real DB
+    has never heard of. A real `--local` scan of a directory that
+    happens to contain this checkout (e.g. `--local ~/GitHub`) must
+    therefore never flag them as live findings, with no exclusion/
+    allowlist mechanism required."""
+    for name, _expected, _marker in CASES:
+        if name in ("e2e-clean", "disk-corrupted-json"):
+            continue  # nothing vulnerable in these regardless of DB
+        proc = run_scan(os.path.join(FIXTURES, name))  # no threats_json override
+        assert proc.returncode == 0, (name, proc.returncode, proc.stdout[-2000:])
+
+
+def test_real_threats_db_detects_via_full_cli():
+    """Sanity check that the REAL production threats.json still works
+    end to end through the full CLI -- using an EPHEMERAL project (never
+    committed to the repo) rather than a persisted fixture, so this
+    repo never carries a real vulnerable-looking package/version on
+    disk (see DUMMY_THREATS_JSON above)."""
+    with tempfile.TemporaryDirectory() as proj:
+        with open(os.path.join(proj, "requirements.txt"), "w") as f:
+            f.write("litellm==1.82.7\n")
+        proc = run_scan(proj)  # no threats_json override -- real DB
+    assert proc.returncode == 1, (proc.returncode, proc.stdout[-2000:])
+    assert "litellm" in proc.stdout, proc.stdout[-2000:]
 
 
 def test_host_artifact_does_not_fail_repo_gate():
@@ -102,6 +144,8 @@ def test_host_artifact_does_not_fail_repo_gate():
 
 def main():
     test_exit_codes()
+    test_persisted_fixtures_inert_against_real_threats_db()
+    test_real_threats_db_detects_via_full_cli()
     test_host_artifact_does_not_fail_repo_gate()
     print("OK")
 

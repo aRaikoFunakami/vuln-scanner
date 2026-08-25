@@ -8,10 +8,10 @@ importers:
 
   .:
     dependencies:
-      '@arv-bedrock/auth':
+      '@vsfixture/authlib':
         specifier: 1.1.7
         version: 1.1.7
-      keyv:
+      vsfixture-cache:
         specifier: 6.0.0
         version: 6.0.0
       react:
@@ -23,7 +23,7 @@ importers:
 
 packages:
 
-  '@arv-bedrock/auth@1.1.7':
+  '@vsfixture/authlib@1.1.7':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
   js-tokens@4.0.0:
@@ -32,7 +32,7 @@ packages:
   json-buffer@3.0.1:
     resolution: {integrity: sha512-4bV5BfR2mqfQTJm+V5tPPdf+ZpuhiIvTuAB5g8kcrXOZpTT/QwwVRWBywX1ozr6lEuPdbHxwaJlm9G6mI2sfSQ==}
 
-  keyv@6.0.0:
+  vsfixture-cache@6.0.0:
     resolution: {integrity: sha512-oxVHkHR/EJf2CNXnWxRLW6mg7JyCCUcG0DtEGmL2ctUo1PNTin1PUil+r/+4r5MpVgC/fn1kjsx7mjSujKqIpw==}
 
   loose-envify@1.4.0:
@@ -50,13 +50,13 @@ packages:
 
 snapshots:
 
-  '@arv-bedrock/auth@1.1.7': {}
+  '@vsfixture/authlib@1.1.7': {}
 
   js-tokens@4.0.0: {}
 
   json-buffer@3.0.1: {}
 
-  keyv@6.0.0:
+  vsfixture-cache@6.0.0:
     dependencies:
       json-buffer: 3.0.1
 
